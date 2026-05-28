@@ -1,0 +1,33 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcuserdatad/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# macOS
+.DS_Store
+
+# Secrets / API keys (NEVER commit)
+.env
+.env.*
+secrets.plist
+APIKeys.plist
+*.secrets
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.app
+
+# Logs
+*.log

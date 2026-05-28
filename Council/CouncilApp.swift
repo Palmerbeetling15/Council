@@ -9,9 +9,13 @@ import SwiftUI
 
 @main
 struct CouncilApp: App {
+    @State private var store = CouncilStore()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(store: store)
         }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 960, height: 640)
     }
 }
