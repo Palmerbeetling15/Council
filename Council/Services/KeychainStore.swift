@@ -70,24 +70,3 @@ enum KeychainStore {
         return status == errSecSuccess || status == errSecItemNotFound
     }
 }
-
-#if DEBUG
-extension KeychainStore {
-    /// Temporary self-check: save → read → delete a throwaway value, printing the result
-    /// to the Xcode console. Removed once SetupView exercises the store for real.
-    static func debugRoundTrip() {
-        let account = "debug.roundtrip"
-        do {
-            try save("hello-council-123", account: account)
-            let value = try read(account: account)
-            print("[KeychainStore] save→read: '\(value ?? "nil")' — \(value == "hello-council-123" ? "✅ MATCH" : "❌ MISMATCH")")
-
-            delete(account: account)
-            let afterDelete = try read(account: account)
-            print("[KeychainStore] after delete: \(afterDelete == nil ? "✅ nil (silindi)" : "❌ hâlâ duruyor")")
-        } catch {
-            print("[KeychainStore] ❌ error: \(error)")
-        }
-    }
-}
-#endif

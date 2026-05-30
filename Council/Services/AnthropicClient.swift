@@ -5,33 +5,82 @@ import Foundation
 /// a top-level `system` field, and a `content` array in the response.
 struct AnthropicClient: LLMClient {
     let model: String
+    var temperature: Double? = nil
+    var maxTokens: Int? = nil
     private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 
-    func complete(systemPrompt: String, userPrompt: String, apiKey: String) async throws -> String {
+    func validate(apiKey: String) async throws {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-
-        let body = RequestBody(
-            model: model,
-            max_tokens: 1024,
-            system: systemPrompt,
-            messages: [.init(role: "user", content: userPrompt)]
-        )
+        // Smallest possible call: 1 output token. We only care about the HTTP status.
+        let body = RequestBody(model: model, max_tokens: 1, system: "ping",
+                               messages: [.init(role: "user", content: .text("Hi"))])
         request.httpBody = try JSONEncoder().encode(body)
-
         let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let detail = String(data: data, encoding: .utf8) ?? ""
-            throw LLMError.message("HTTP \(http.statusCode): \(detail.prefix(300))")
-        }
+        try KeyValidation.interpret(status: (response as? HTTPURLResponse)?.statusCode ?? 0, body: data)
+    }
 
-        let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
-        let text = decoded.content.compactMap(\.text).joined()
-        guard !text.isEmpty else { throw LLMError.message("Boş cevap döndü.") }
-        return text
+    func stream(messages: [ChatMessage], apiKey: String) -> AsyncThrowingStream<StreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: endpoint)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                    request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+                    let system = messages.filter { $0.role == .system }.map(\.text).joined(separator: "\n\n")
+                    let convo: [RequestBody.Message] = messages.compactMap { msg in
+                        guard msg.role != .system else { return nil }
+                        let role = msg.role == .assistant ? "assistant" : "user"
+                        if let image = msg.image, msg.role == .user {
+                            return RequestBody.Message(role: role, content: .blocks([
+                                Block(type: "image", source: .init(type: "base64", media_type: image.mediaType, data: image.base64)),
+                                Block(type: "text", text: msg.text)
+                            ]))
+                        }
+                        return RequestBody.Message(role: role, content: .text(msg.text))
+                    }
+                    let body = RequestBody(model: model, max_tokens: maxTokens ?? 1024, system: system,
+                                           messages: convo, stream: true, temperature: temperature)
+                    request.httpBody = try JSONEncoder().encode(body)
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                        throw LLMError.message("HTTP \(http.statusCode)")
+                    }
+                    var input = 0, output = 0
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        guard let data = payload.data(using: .utf8),
+                              let ev = try? JSONDecoder().decode(StreamEvent.self, from: data) else { continue }
+                        if let t = ev.delta?.text { continuation.yield(.text(t)) }
+                        if let i = ev.message?.usage?.input_tokens { input = i }
+                        if let o = ev.usage?.output_tokens { output = o }
+                    }
+                    continuation.yield(.usage(input: input, output: output))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private struct StreamEvent: Decodable {
+        let delta: Delta?
+        let message: StartMessage?
+        let usage: Usage?
+        struct Delta: Decodable { let text: String? }
+        struct StartMessage: Decodable { let usage: Usage? }
+        struct Usage: Decodable { let input_tokens: Int?; let output_tokens: Int? }
     }
 
     private struct RequestBody: Encodable {
@@ -39,11 +88,33 @@ struct AnthropicClient: LLMClient {
         let max_tokens: Int
         let system: String
         let messages: [Message]
-        struct Message: Encodable { let role: String; let content: String }
+        var stream: Bool? = nil
+        var temperature: Double? = nil
+        struct Message: Encodable { let role: String; let content: Content }
     }
 
-    private struct ResponseBody: Decodable {
-        let content: [Block]
-        struct Block: Decodable { let type: String; let text: String? }
+    /// Message content is either a bare string (text-only) or an array of blocks (with image).
+    private enum Content: Encodable {
+        case text(String)
+        case blocks([Block])
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .text(let s):    try c.encode(s)
+            case .blocks(let b):  try c.encode(b)
+            }
+        }
+    }
+
+    private struct Block: Encodable {
+        let type: String
+        var text: String? = nil
+        var source: ImageSource? = nil      // nil fields are omitted by the synthesized encoder
+    }
+
+    private struct ImageSource: Encodable {
+        let type: String                    // "base64"
+        let media_type: String
+        let data: String
     }
 }

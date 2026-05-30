@@ -15,7 +15,8 @@ struct CouncilApp: App {
         WindowGroup {
             ContentView(store: store)
         }
+        .windowStyle(.hiddenTitleBar)   // immersive, brutalist — content goes edge to edge
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 960, height: 640)
+        .defaultSize(width: 1300, height: 820)
     }
 }
