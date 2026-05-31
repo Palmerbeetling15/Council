@@ -45,10 +45,10 @@ enum Blue {
 
     // Glass tokens. `accent` is now monochrome (near-ink) — used sparingly for a primary tint;
     // most "active" emphasis comes from a brighter glass fill + border + white glow, not color.
-    static let accent      = Color.adaptive(Color(red: 0.10, green: 0.10, blue: 0.11), Color.white)
-    static let glassFill   = Color.adaptive(Color.white.opacity(0.62),                Color.white.opacity(0.09))  // tint over material
-    static let glassStroke = Color.adaptive(Color.black.opacity(0.10),                Color.white.opacity(0.18))  // hairline edge
-    static let glassBright = Color.adaptive(Color.black.opacity(0.06),                Color.white.opacity(0.14))  // active surface fill
+    static let accent      = Color.adaptive(Color(red: 0.20, green: 0.50, blue: 0.95), Color(red: 0.40, green: 0.66, blue: 1.0))  // the single accent
+    static let glassFill   = Color.adaptive(Color.white.opacity(0.28),                Color.white.opacity(0.045)) // thin tint — let the material + backdrop show through
+    static let glassStroke = Color.adaptive(Color.black.opacity(0.08),                Color.white.opacity(0.16))  // hairline edge
+    static let glassBright = Color.adaptive(Color.white.opacity(0.45),                Color.white.opacity(0.12))  // active surface fill
     static let ok          = Color.adaptive(Color(red: 0.30, green: 0.32, blue: 0.34), Color(red: 0.88, green: 0.90, blue: 0.93)) // "done" → bright neutral
     static let warn        = Color.adaptive(Color(red: 0.55, green: 0.56, blue: 0.58), Color(red: 0.60, green: 0.62, blue: 0.66)) // "standby" → mid neutral
 
@@ -57,36 +57,66 @@ enum Blue {
     static func body(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .system(size: s, weight: w) }
 }
 
-/// Frosted-glass surface: translucent material, rounded corners, a hairline edge and a soft
-/// drop shadow. The building block of the liquid-glass look.
+/// Frosted-glass surface. On macOS 26+ this uses Apple's real Liquid Glass (`.glassEffect`),
+/// which genuinely refracts + reflects whatever is behind it. On older systems it falls back to
+/// a hand-built material + hairline approximation so the app still builds and looks reasonable.
 struct GlassPanel: ViewModifier {
     var corner: CGFloat = 18
     var strokeOpacity: Double = 1
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
-        return content
-            .background(.ultraThinMaterial, in: shape)
-            // A faint top-to-bottom light wash gives the surface volume instead of reading flat.
-            .background(
-                LinearGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.015)],
-                               startPoint: .top, endPoint: .bottom)
-                    .opacity(0.9), in: shape)
-            .background(Blue.glassFill, in: shape)
-            .overlay(shape.strokeBorder(Blue.glassStroke.opacity(strokeOpacity), lineWidth: 1))
-            // Bright hairline along the very top edge — the classic glass "lip".
-            .overlay(
-                shape.strokeBorder(
-                    LinearGradient(colors: [Color.white.opacity(0.35), Color.white.opacity(0)],
-                                   startPoint: .top, endPoint: .center),
-                    lineWidth: 1)
-            )
-            .clipShape(shape)
-            .shadow(color: .black.opacity(0.28), radius: 22, x: 0, y: 12)
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            // Real Liquid Glass. `.rect(cornerRadius:)` is the shape API glassEffect expects.
+            content.glassEffect(.regular, in: .rect(cornerRadius: corner))
+        } else {
+            let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+            content
+                .background(.regularMaterial, in: shape)
+                .background(Blue.glassFill, in: shape)
+                .overlay(shape.strokeBorder(
+                    LinearGradient(colors: [Color.white.opacity(0.45), Color.white.opacity(0.06)],
+                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                .overlay(shape.strokeBorder(Blue.glassStroke.opacity(strokeOpacity), lineWidth: 1))
+                .clipShape(shape)
+                .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 14)
+        }
     }
 }
+/// A small control surface (button / chip / field) in real Liquid Glass, capsule or rounded-rect.
+/// Falls back to a material on pre-26 systems. `tinted`/`interactive` map to the Glass options.
+struct GlassControl: ViewModifier {
+    var corner: CGFloat? = nil          // nil → capsule
+    var tinted: Bool = false
+    var interactive: Bool = false
+    @available(macOS 26.0, *)
+    private var glass: Glass {
+        var g: Glass = .regular
+        if tinted { g = g.tint(Blue.accent) }
+        if interactive { g = g.interactive() }
+        return g
+    }
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            if let corner { content.glassEffect(glass, in: .rect(cornerRadius: corner)) }
+            else { content.glassEffect(glass, in: .capsule) }
+        } else {
+            let bg = AnyShapeStyle(.ultraThinMaterial)
+            if let corner {
+                content.background(bg, in: RoundedRectangle(cornerRadius: corner, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+            } else {
+                content.background(bg, in: Capsule()).overlay(Capsule().strokeBorder(Blue.glassStroke, lineWidth: 1))
+            }
+        }
+    }
+}
+
 extension View {
     func glassPanel(corner: CGFloat = 18, strokeOpacity: Double = 1) -> some View {
         modifier(GlassPanel(corner: corner, strokeOpacity: strokeOpacity))
+    }
+    /// Capsule glass control (default) or rounded-rect when `corner` is given.
+    func glassControl(corner: CGFloat? = nil, tinted: Bool = false, interactive: Bool = false) -> some View {
+        modifier(GlassControl(corner: corner, tinted: tinted, interactive: interactive))
     }
 }
 
@@ -248,13 +278,15 @@ struct ContentView: View {
     }
 
     private var mainUI: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 14) {
             if sidebarOpen {
                 sidebar.transition(.move(edge: .leading).combined(with: .opacity))
             }
             mainCanvas
                 .overlay(alignment: .leading) { sidebarHandle }
         }
+        // Outer margin so the liquid background shows around the floating panels.
+        .padding(.horizontal, 16).padding(.top, 30).padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(gridBackground)
         .contentShape(Rectangle())
@@ -287,37 +319,41 @@ struct ContentView: View {
 
     // MARK: Background grid
 
-    /// Liquid-glass backdrop: a deep vertical gradient with a few large, soft, slow blobs of
-    /// light behind everything — what the frosted panels refract.
+    /// Liquid-glass backdrop. A rich MeshGradient gives the high-contrast, varied colour field the
+    /// glass panels need to actually refract — a flat fill or soft blobs give the glass nothing to
+    /// bend, which is why it looked grey before. Tuned per appearance.
     private var gridBackground: some View {
-        ZStack {
-            LinearGradient(colors: [
-                Color.adaptive(Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.085, green: 0.085, blue: 0.09)),
-                Color.adaptive(Color(red: 0.92, green: 0.92, blue: 0.94), Color(red: 0.05,  green: 0.05,  blue: 0.055))
-            ], startPoint: .topLeading, endPoint: .bottomTrailing)
-
-            // Brighter monochrome light pools so the frosted panels actually have something to
-            // refract — without these the glass reads as flat black.
-            blob(0.16, size: 640).offset(x: -280, y: -200)
-            blob(0.13, size: 560).offset(x: 340, y: 220)
-            blob(0.10, size: 480).offset(x: 100, y: 320)
-            blob(0.08, size: 420).offset(x: 420, y: -160)
+        Group {
+            if #available(macOS 15.0, *) {
+                MeshGradient(width: 3, height: 3, points: [
+                    [0, 0],   [0.5, 0],   [1, 0],
+                    [0, 0.5], [0.5, 0.5], [1, 0.5],
+                    [0, 1],   [0.5, 1],   [1, 1]
+                ], colors: meshColors)
+            } else {
+                LinearGradient(colors: meshColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
         }
         .ignoresSafeArea()
     }
 
-    private func blob(_ opacity: Double, size: CGFloat) -> some View {
-        Circle()
-            .fill(Color.adaptive(.white.opacity(opacity * 0.8), .white.opacity(opacity)))
-            .frame(width: size, height: size).blur(radius: 100)
+    /// Nine mesh control colours. Dark = deep saturated jewel tones; Light = bright candy tones.
+    private var meshColors: [Color] {
+        scheme == .dark
+        ? [Color(red: 0.10, green: 0.12, blue: 0.30), Color(red: 0.18, green: 0.10, blue: 0.38), Color(red: 0.08, green: 0.16, blue: 0.40),
+           Color(red: 0.22, green: 0.10, blue: 0.42), Color(red: 0.06, green: 0.10, blue: 0.22), Color(red: 0.10, green: 0.30, blue: 0.45),
+           Color(red: 0.30, green: 0.12, blue: 0.40), Color(red: 0.08, green: 0.22, blue: 0.40), Color(red: 0.14, green: 0.34, blue: 0.50)]
+        : [Color(red: 0.62, green: 0.74, blue: 1.0),  Color(red: 0.80, green: 0.70, blue: 1.0),  Color(red: 0.66, green: 0.82, blue: 1.0),
+           Color(red: 0.86, green: 0.70, blue: 0.98), Color(red: 0.92, green: 0.88, blue: 1.0),  Color(red: 0.66, green: 0.86, blue: 0.94),
+           Color(red: 0.96, green: 0.78, blue: 0.86), Color(red: 0.72, green: 0.84, blue: 1.0),  Color(red: 0.80, green: 0.92, blue: 0.96)]
     }
+
 
     // MARK: Sidebar
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Clear the floating traffic lights (hidden title bar) — no wordmark, just breathing room.
-            Color.clear.frame(height: 40)
+            Color.clear.frame(height: 14)
 
             Button(action: { store.newSession(); canvasMode = .panels }) {
                 HStack(spacing: 8) {
@@ -367,12 +403,9 @@ struct ContentView: View {
             modeItem("gearshape", "SETTINGS", state: .button) { showSettings = true }
                 .padding(.bottom, 6)
         }
-        .frame(width: 256)
+        .frame(width: 232)
         .frame(maxHeight: .infinity)
-        .background(.ultraThinMaterial)
-        .background(Blue.glassFill)
-        .overlay(alignment: .trailing) { Rectangle().fill(Blue.glassStroke).frame(width: 1) }
-        .ignoresSafeArea(.container, edges: .top)   // fill the title-bar strip so the panel reaches the top
+        .glassPanel(corner: 24)   // floating frosted card, gaps on all sides
     }
 
     private func sectionLabel(_ t: String) -> some View {
@@ -498,7 +531,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             directiveInput
         }
-        .padding(.horizontal, 22).padding(.top, 6).padding(.bottom, 14)
+        .padding(.horizontal, 4).padding(.bottom, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
