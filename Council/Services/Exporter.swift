@@ -36,4 +36,31 @@ enum Exporter {
         let data = textView.dataWithPDF(inside: textView.bounds)
         try? data.write(to: url)
     }
+
+    // MARK: - Shareable council config (.council.json)
+
+    /// Save a council config to a `.json` file the user can share / commit to GitHub.
+    static func saveCouncil(_ config: CouncilConfig) {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? enc.encode(config) else { return }
+        let panel = NSSavePanel()
+        let safeName = config.name.replacingOccurrences(of: " ", with: "-").lowercased()
+        panel.nameFieldStringValue = "\(safeName.isEmpty ? "council" : safeName).council.json"
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url { try? data.write(to: url) }
+    }
+
+    /// Open a `.json` council file the user picks. Returns nil if cancelled or invalid.
+    static func openCouncil() -> CouncilConfig? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(CouncilConfig.self, from: data),
+              !config.seats.isEmpty else { return nil }
+        return config
+    }
 }

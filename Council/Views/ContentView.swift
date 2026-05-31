@@ -29,19 +29,87 @@ extension NSView {
     }
 }
 
-/// "Architectural blueprint / brutalist" palette — light by default, with a matching
-/// dark (cyberpunk terminal) variant. Every color flips with the chosen appearance.
+/// "Liquid glass" palette — a deep slate, frosted surfaces, and a blue accent, with a soft
+/// light variant. Token names are kept from the old brutalist theme so call sites don't churn;
+/// only the values changed. `ink` = primary text/icons, `sub`/`dim` = secondary, `paper` = the
+/// (now mostly translucent) surface tint, `bg` = the gradient base.
 enum Blue {
-    static let bg    = Color.adaptive(Color(red: 0.976, green: 0.976, blue: 0.976), Color(red: 0.05,  green: 0.05,  blue: 0.055)) // #f9f9f9 / near-black
-    static let paper = Color.adaptive(.white,                                       Color(red: 0.105, green: 0.105, blue: 0.115)) // panel surface
-    static let ink   = Color.adaptive(.black,                                       Color(red: 0.95,  green: 0.95,  blue: 0.96))  // text + borders
-    static let grid  = Color.adaptive(Color(red: 0.94,  green: 0.94,  blue: 0.94),  Color(red: 0.16,  green: 0.16,  blue: 0.17))  // grid lines
-    static let sub   = Color.adaptive(Color(red: 0.37,  green: 0.37,  blue: 0.37),  Color(red: 0.62,  green: 0.62,  blue: 0.64))  // secondary text
-    static let dim   = Color.adaptive(Color(red: 0.78,  green: 0.78,  blue: 0.78),  Color(red: 0.40,  green: 0.40,  blue: 0.42))  // placeholder / disabled
-    static let red   = Color.adaptive(Color(red: 0.73,  green: 0.10,  blue: 0.10),  Color(red: 1.0,   green: 0.42,  blue: 0.42))  // error
+    // Neutral grayscale glass — no hue. Dark base ≈ #121212 / #0e0e0e, light ≈ soft warm-white.
+    static let bg    = Color.adaptive(Color(red: 0.95,  green: 0.95,  blue: 0.96),  Color(red: 0.075, green: 0.075, blue: 0.078)) // base
+    static let paper = Color.adaptive(.white,                                       Color(red: 0.12,  green: 0.12,  blue: 0.125)) // solid fallback
+    static let ink   = Color.adaptive(Color(red: 0.10, green: 0.10, blue: 0.11),    Color(red: 0.95,  green: 0.95,  blue: 0.96))  // primary text
+    static let grid  = Color.adaptive(Color(red: 0.90,  green: 0.90,  blue: 0.91),  Color(red: 0.18,  green: 0.18,  blue: 0.19))  // (legacy; unused)
+    static let sub   = Color.adaptive(Color(red: 0.42,  green: 0.42,  blue: 0.44),  Color(red: 0.74,  green: 0.75,  blue: 0.77))  // secondary text (on-surface-variant)
+    static let dim   = Color.adaptive(Color(red: 0.64,  green: 0.64,  blue: 0.66),  Color(red: 0.46,  green: 0.46,  blue: 0.48))  // placeholder / disabled
+    static let red   = Color.adaptive(Color(red: 0.82,  green: 0.24,  blue: 0.28),  Color(red: 1.0,   green: 0.55,  blue: 0.52))  // error (kept — functional)
+
+    // Glass tokens. `accent` is now monochrome (near-ink) — used sparingly for a primary tint;
+    // most "active" emphasis comes from a brighter glass fill + border + white glow, not color.
+    static let accent      = Color.adaptive(Color(red: 0.10, green: 0.10, blue: 0.11), Color.white)
+    static let glassFill   = Color.adaptive(Color.white.opacity(0.62),                Color.white.opacity(0.09))  // tint over material
+    static let glassStroke = Color.adaptive(Color.black.opacity(0.10),                Color.white.opacity(0.18))  // hairline edge
+    static let glassBright = Color.adaptive(Color.black.opacity(0.06),                Color.white.opacity(0.14))  // active surface fill
+    static let ok          = Color.adaptive(Color(red: 0.30, green: 0.32, blue: 0.34), Color(red: 0.88, green: 0.90, blue: 0.93)) // "done" → bright neutral
+    static let warn        = Color.adaptive(Color(red: 0.55, green: 0.56, blue: 0.58), Color(red: 0.60, green: 0.62, blue: 0.66)) // "standby" → mid neutral
+
     static func serif(_ s: CGFloat, _ w: Font.Weight = .bold) -> Font { .system(size: s, weight: w, design: .serif) }
     static func mono(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .system(size: s, weight: w, design: .monospaced) }
     static func body(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .system(size: s, weight: w) }
+}
+
+/// Frosted-glass surface: translucent material, rounded corners, a hairline edge and a soft
+/// drop shadow. The building block of the liquid-glass look.
+struct GlassPanel: ViewModifier {
+    var corner: CGFloat = 18
+    var strokeOpacity: Double = 1
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        return content
+            .background(.ultraThinMaterial, in: shape)
+            // A faint top-to-bottom light wash gives the surface volume instead of reading flat.
+            .background(
+                LinearGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.015)],
+                               startPoint: .top, endPoint: .bottom)
+                    .opacity(0.9), in: shape)
+            .background(Blue.glassFill, in: shape)
+            .overlay(shape.strokeBorder(Blue.glassStroke.opacity(strokeOpacity), lineWidth: 1))
+            // Bright hairline along the very top edge — the classic glass "lip".
+            .overlay(
+                shape.strokeBorder(
+                    LinearGradient(colors: [Color.white.opacity(0.35), Color.white.opacity(0)],
+                                   startPoint: .top, endPoint: .center),
+                    lineWidth: 1)
+            )
+            .clipShape(shape)
+            .shadow(color: .black.opacity(0.28), radius: 22, x: 0, y: 12)
+    }
+}
+extension View {
+    func glassPanel(corner: CGFloat = 18, strokeOpacity: Double = 1) -> some View {
+        modifier(GlassPanel(corner: corner, strokeOpacity: strokeOpacity))
+    }
+}
+
+/// Hover affordance: on pointer-over, a clean frosted-glass pill fades in behind the content with
+/// a faint light edge — the calm "liquid glass" touch response (no flowing light).
+struct GlassHover: ViewModifier {
+    var corner: CGFloat = 10
+    @State private var hovered = false
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Blue.glassBright))
+                    .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .opacity(hovered ? 1 : 0)
+            }
+            .onHover { h in withAnimation(.easeOut(duration: 0.18)) { hovered = h } }
+    }
+}
+extension View {
+    func glassHover(corner: CGFloat = 10) -> some View { modifier(GlassHover(corner: corner)) }
 }
 
 /// A soft glow (ink → white in dark mode) that follows the cursor inside a view's bounds
@@ -91,10 +159,6 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var showImagePreview = false
 
-    /// Project name (max 5 chars). Persisted — non-sensitive, so UserDefaults is fine.
-    @AppStorage("council.projectName") private var projectName = ""
-    @State private var draftName = ""
-
     /// Appearance: "light" (default) or "dark". Toggled from Settings, not the main screen.
     @AppStorage("council.appearance") private var appearance = "light"
     /// Whether exported share images carry the "made with Council" watermark (default on).
@@ -111,6 +175,9 @@ struct ContentView: View {
     struct PendingPick: Identifiable { let id = UUID(); let provider: LLMProvider; let seatID: Int }
     @State private var pendingPick: PendingPick?
 
+    /// Which advisor panel the cursor is over — flattens its perspective tilt for easy reading.
+    @State private var hoveredSeat: Int?
+
     /// Which canvas the user is looking at: the 3-panel round, or a full-width deliberation artifact.
     enum CanvasMode { case panels, divergence, synthesis }
     @State private var canvasMode: CanvasMode = .panels
@@ -125,19 +192,14 @@ struct ContentView: View {
     init(store: CouncilStore) { self.store = store }
 
     var body: some View {
-        ZStack {
-            mainUI
-            if projectName.isEmpty {
-                onboardingOverlay.transition(.opacity)
-            }
-        }
+        mainUI
         // Fill the whole window so content can't size to its *ideal* width and get re-centered
         // (which is what shifted the view when NEW DIRECTIVE emptied the panels).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(scheme)
-        .background { if !projectName.isEmpty { shortcutButtons } }
+        .background { shortcutButtons }
         .sheet(isPresented: $showSettings) {
-            SettingsSheet(store: store, appearance: $appearance, projectName: $projectName) { showSettings = false }
+            SettingsSheet(store: store, appearance: $appearance) { showSettings = false }
                 .preferredColorScheme(scheme)
         }
         .onAppear { installKeyMonitor() }
@@ -209,9 +271,11 @@ struct ContentView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Blue.ink)
                 .rotationEffect(.degrees(sidebarOpen ? 0 : 180))
-                .frame(width: 22, height: 46)
-                .background(Blue.paper)
-                .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                .frame(width: 24, height: 48)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -220,126 +284,56 @@ struct ContentView: View {
         .offset(x: sidebarOpen ? -11 : 0)
     }
 
-    // MARK: First-launch onboarding (project name, ≤ 5 chars)
-
-    private var onboardingOverlay: some View {
-        ZStack {
-            gridBackground
-            HStack(spacing: 0) {
-                // Left: name entry
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("COUNCIL").font(Blue.serif(40)).foregroundStyle(Blue.ink).tracking(-1)
-                    Text("NAME YOUR PROJECT").font(Blue.mono(12, .bold)).tracking(2).foregroundStyle(Blue.sub)
-
-                    HStack(spacing: 2) {
-                        Text("PROJECT_").font(Blue.mono(22, .bold)).foregroundStyle(Blue.ink)
-                        PlainTextField(text: $draftName, placeholder: "XXXXX",
-                                       fontSize: 22, weight: .bold,
-                                       filter: { String($0.replacingOccurrences(of: " ", with: "").prefix(5)) },
-                                       onSubmit: commitName)
-                            .frame(width: 150, height: 30)
-                    }
-                    .padding(.bottom, 6)
-                    .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: 2) }
-
-                    Text("MAX 5 CHARACTERS").font(Blue.mono(9)).foregroundStyle(Blue.dim).tracking(1)
-
-                    Button(action: commitName) {
-                        Text("INITIALIZE").font(Blue.mono(12, .bold)).tracking(1)
-                            .foregroundStyle(Blue.paper)
-                            .padding(.horizontal, 34).padding(.vertical, 14)
-                            .background(nameReady ? Blue.ink : Blue.dim)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!nameReady)
-                    .padding(.top, 6)
-                }
-                .padding(44)
-                .frame(width: 400, alignment: .leading)
-
-                Rectangle().fill(Blue.ink).frame(width: 2)
-
-                // Right: where the conversation gets saved (no server)
-                VStack(alignment: .leading, spacing: 12) {
-                    Image(systemName: "folder").font(.system(size: 30)).foregroundStyle(Blue.ink)
-                    Text("CONVERSATION STORAGE").font(Blue.mono(11, .bold)).tracking(2).foregroundStyle(Blue.sub)
-                    Text("Your conversations will be saved to:")
-                        .font(Blue.body(12)).foregroundStyle(Blue.sub)
-                    Text(onboardingSavePath)
-                        .font(Blue.mono(10)).foregroundStyle(Blue.ink)
-                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                    Spacer(minLength: 0)
-                    Text("No server — everything stays on this Mac, under your control.")
-                        .font(Blue.body(11)).foregroundStyle(Blue.sub)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(36)
-                .frame(width: 320, alignment: .leading)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .background(Blue.paper)
-            .overlay(Rectangle().stroke(Blue.ink, lineWidth: 3))
-        }
-    }
-
-    private var onboardingSavePath: String {
-        store.conversationFolderDisplayPath
-    }
-
-    private var nameReady: Bool { !draftName.trimmingCharacters(in: .whitespaces).isEmpty }
-
-    private func commitName() {
-        let n = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !n.isEmpty else { return }
-        withAnimation(.easeInOut(duration: 0.25)) { projectName = String(n.prefix(5)) }
-    }
 
     // MARK: Background grid
 
+    /// Liquid-glass backdrop: a deep vertical gradient with a few large, soft, slow blobs of
+    /// light behind everything — what the frosted panels refract.
     private var gridBackground: some View {
-        Canvas { ctx, size in
-            let step: CGFloat = 24
-            var x: CGFloat = 0
-            while x < size.width {
-                ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: size.height)), with: .color(Blue.grid))
-                x += step
-            }
-            var y: CGFloat = 0
-            while y < size.height {
-                ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(Blue.grid))
-                y += step
-            }
+        ZStack {
+            LinearGradient(colors: [
+                Color.adaptive(Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.085, green: 0.085, blue: 0.09)),
+                Color.adaptive(Color(red: 0.92, green: 0.92, blue: 0.94), Color(red: 0.05,  green: 0.05,  blue: 0.055))
+            ], startPoint: .topLeading, endPoint: .bottomTrailing)
+
+            // Brighter monochrome light pools so the frosted panels actually have something to
+            // refract — without these the glass reads as flat black.
+            blob(0.16, size: 640).offset(x: -280, y: -200)
+            blob(0.13, size: 560).offset(x: 340, y: 220)
+            blob(0.10, size: 480).offset(x: 100, y: 320)
+            blob(0.08, size: 420).offset(x: 420, y: -160)
         }
-        .background(Blue.bg)
         .ignoresSafeArea()
+    }
+
+    private func blob(_ opacity: Double, size: CGFloat) -> some View {
+        Circle()
+            .fill(Color.adaptive(.white.opacity(opacity * 0.8), .white.opacity(opacity)))
+            .frame(width: size, height: size).blur(radius: 100)
     }
 
     // MARK: Sidebar
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("PROJECT_\(projectName.uppercased())")
-                    .font(Blue.serif(26)).foregroundStyle(Blue.ink).tracking(-0.5)
-                    .lineLimit(1).minimumScaleFactor(0.6)
-            }
-            // Extra top room clears the floating traffic lights (hidden title bar).
-            .padding(.horizontal, 18).padding(.top, 34).padding(.bottom, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: 2) }
+            // Clear the floating traffic lights (hidden title bar) — no wordmark, just breathing room.
+            Color.clear.frame(height: 40)
 
             Button(action: { store.newSession(); canvasMode = .panels }) {
-                Text("NEW DIRECTIVE").font(Blue.mono(11, .bold)).tracking(1)
-                    .frame(maxWidth: .infinity).padding(.vertical, 10)
-                    .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                HStack(spacing: 8) {
+                    Image(systemName: "plus").font(.system(size: 12, weight: .bold))
+                    Text("NEW DIRECTIVE").font(Blue.mono(11, .bold)).tracking(1)
+                }
+                .foregroundStyle(Blue.ink)
+                .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
+                .glassHover(corner: 10)            // plain text; the glass panel only appears on hover
+                .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 8)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain).foregroundStyle(Blue.ink).padding(14)
+            .buttonStyle(.plain)
             .disabled(isBusy)
             .opacity(isBusy ? 0.4 : 1)
             .help(isBusy ? "Finish or stop the current generation first" : "Start a new directive")
-            .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: 2) }
-
-            sectionLabel("DELIBERATION")
 
             modeItem("point.3.connected.trianglepath.dotted", "ROUNDTABLE",
                      state: canvasMode == .panels ? .active : .button,
@@ -370,16 +364,16 @@ struct ContentView: View {
 
             historySection
 
-            Rectangle().fill(Blue.ink).frame(height: 2)
             modeItem("gearshape", "SETTINGS", state: .button) { showSettings = true }
+                .padding(.bottom, 6)
         }
         .frame(width: 256)
         .frame(maxHeight: .infinity)
-        .background(Blue.paper)
-        .overlay(alignment: .trailing) { Rectangle().fill(Blue.ink).frame(width: 2) }
+        .background(.ultraThinMaterial)
+        .background(Blue.glassFill)
+        .overlay(alignment: .trailing) { Rectangle().fill(Blue.glassStroke).frame(width: 1) }
+        .ignoresSafeArea(.container, edges: .top)   // fill the title-bar strip so the panel reaches the top
     }
-
-    private enum ModeState { case active, locked, button }
 
     private func sectionLabel(_ t: String) -> some View {
         Text(t).font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.dim)
@@ -387,33 +381,10 @@ struct ContentView: View {
             .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 6)
     }
 
-    /// Sidebar = the deliberation pipeline. Only the mode that actually works (ROUND 1,
-    /// parallel answers) is active; the rest are honestly shown as locked / not-built-yet.
-    /// `.button` is a normal tappable row (e.g. SETTINGS) that runs `action`.
-    @ViewBuilder
-    private func modeItem(_ icon: String, _ label: String, state: ModeState, hint: String? = nil, action: (() -> Void)? = nil) -> some View {
-        let active = state == .active
-        let locked = state == .locked
-        let row = HStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 16))
-            Text(label).font(Blue.mono(11, .bold)).tracking(1)
-            Spacer()
-            if locked { Image(systemName: "lock.fill").font(.system(size: 9)) }
-        }
-        .padding(.horizontal, 18).padding(.vertical, 14)
-        .foregroundStyle(active ? Blue.paper : (locked ? Blue.dim : Blue.ink))
-        .background(active ? Blue.ink : Color.clear)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: 1) }
-        .help(hint ?? (locked ? "Not built yet — on the roadmap"
-                              : (state == .button ? "Settings" : "Active mode: all models answer in parallel")))
-
-        if let action {
-            Button(action: action) { row.contentShape(Rectangle()).cursorGlow() }
-                .buttonStyle(.plain)
-        } else {
-            row.contentShape(Rectangle())
-        }
+    /// Sidebar deliberation row. `.button` is a normal tappable row (e.g. SETTINGS).
+    private func modeItem(_ icon: String, _ label: String, state: ModeRow.ModeState,
+                          hint: String? = nil, action: (() -> Void)? = nil) -> some View {
+        ModeRow(icon: icon, label: label, state: state, hint: hint, action: action)
     }
 
     // MARK: Main canvas
@@ -476,16 +447,18 @@ struct ContentView: View {
     private var exportMenu: some View {
         Menu {
             Button("Copy markdown") { Exporter.copy(store.exportMarkdown()) }
-            Button("Save markdown…") { Exporter.saveMarkdown(store.exportMarkdown(), name: projectName) }
-            Button("Save PDF…") { Exporter.savePDF(store.exportMarkdown(), name: projectName) }
+            Button("Save markdown…") { Exporter.saveMarkdown(store.exportMarkdown(), name: "council") }
+            Button("Save PDF…") { Exporter.savePDF(store.exportMarkdown(), name: "council") }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 11, weight: .bold))
                 Text("EXPORT").font(Blue.mono(9, .bold)).tracking(1)
             }
             .foregroundStyle(store.hasSession ? Blue.ink : Blue.dim)
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .overlay(Rectangle().stroke(Blue.ink.opacity(store.hasSession ? 1 : 0.3), lineWidth: 1.5))
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Blue.glassStroke.opacity(store.hasSession ? 1 : 0.4), lineWidth: 1))
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -496,7 +469,7 @@ struct ContentView: View {
     }
 
     private var mainCanvas: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 18) {
             if store.roundCount > 0 { roundNavigator }
             Group {
                 switch canvasMode {
@@ -525,7 +498,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             directiveInput
         }
-        .padding(.horizontal, 40).padding(.top, 30).padding(.bottom, 8)
+        .padding(.horizontal, 22).padding(.top, 6).padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -534,10 +507,14 @@ struct ContentView: View {
         // whose content has a wide intrinsic size (the model picker) would stretch its column and
         // push the whole window wider — so columns must never size to their content.
         GeometryReader { geo in
-            let colWidth = max(0, (geo.size.width - 32) / 3)   // 2 gaps × 16
-            HStack(spacing: 16) {
+            let gap: CGFloat = 20
+            let colWidth = max(0, (geo.size.width - gap * 2) / 3)   // 2 gaps
+            HStack(alignment: .top, spacing: gap) {
                 ForEach(store.seats) { seat in
+                    let hovered = hoveredSeat == seat.id
+
                     AdvisorPanel(seat: seat,
+                                 answeredProvider: store.viewedAnswerProvider(seat.id),
                                  answer: store.viewedAnswer(seat.id),
                                  peerReview: store.viewedPeerReview(seat.id),
                                  loading: store.isViewingLatest && store.status[seat.id] == .loading,
@@ -550,11 +527,11 @@ struct ContentView: View {
                                  onPickProvider: { pickProvider($0, for: seat) },
                                  onResetSeat: { store.clearProvider(seatID: seat.id) },
                                  onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } })
-                        .frame(width: colWidth)
-                        .clipped()
-                        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 3))
+                        .frame(width: colWidth, height: geo.size.height)   // all three equal height
+                        .glassPanel(corner: 22, strokeOpacity: hovered ? 2.2 : 1)
+                        .contentShape(Rectangle())   // hover only registers over the panel's own rect
+                        .onHover { hoveredSeat = $0 ? seat.id : (hoveredSeat == seat.id ? nil : hoveredSeat) }
                         .id(seat.id)   // bind the panel's @State (begun/justPicked) to its seat
-
                 }
             }
         }
@@ -590,8 +567,10 @@ struct ContentView: View {
                 Button { store.prevRound() } label: {
                     Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold))
                         .foregroundStyle(store.canGoPrevRound ? Blue.ink : Blue.dim)
-                        .frame(width: 26, height: 24)
-                        .overlay(Rectangle().stroke(Blue.ink.opacity(store.canGoPrevRound ? 1 : 0.3), lineWidth: 1.5))
+                        .frame(width: 28, height: 26)
+                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Blue.glassStroke.opacity(store.canGoPrevRound ? 1 : 0.4), lineWidth: 1))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).disabled(!store.canGoPrevRound)
@@ -600,8 +579,10 @@ struct ContentView: View {
                 Button { store.nextRound() } label: {
                     Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
                         .foregroundStyle(store.canGoNextRound ? Blue.ink : Blue.dim)
-                        .frame(width: 26, height: 24)
-                        .overlay(Rectangle().stroke(Blue.ink.opacity(store.canGoNextRound ? 1 : 0.3), lineWidth: 1.5))
+                        .frame(width: 28, height: 26)
+                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Blue.glassStroke.opacity(store.canGoNextRound ? 1 : 0.4), lineWidth: 1))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).disabled(!store.canGoNextRound)
@@ -621,9 +602,10 @@ struct ContentView: View {
 
     /// A quiet outlined chip marking that the viewed round already has this artifact (DIV / SYN).
     private func roundTag(_ s: String) -> some View {
-        Text(s).font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.sub)
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .overlay(Rectangle().stroke(Blue.ink.opacity(0.3), lineWidth: 1))
+        Text(s).font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.ink)
+            .padding(.horizontal, 7).padding(.vertical, 2.5)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Blue.glassStroke, lineWidth: 1))
     }
 
     /// Full-width, calm reading view for the VIEWED round's cross-model artifact.
@@ -650,7 +632,8 @@ struct ContentView: View {
                             Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .bold))
                             Text("REGENERATE").font(Blue.mono(9, .bold)).tracking(1)
                         }
-                        .foregroundStyle(Blue.sub).contentShape(Rectangle())
+                        .foregroundStyle(Blue.sub).padding(.horizontal, 8).padding(.vertical, 5)
+                        .glassHover(corner: 8).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).disabled(!canGenerate).help("Regenerate for this round")
                 }
@@ -663,7 +646,8 @@ struct ContentView: View {
                             Image(systemName: "photo").font(.system(size: 9, weight: .bold))
                             Text("IMAGE").font(Blue.mono(9, .bold)).tracking(1)
                         }
-                        .foregroundStyle(Blue.sub).contentShape(Rectangle())
+                        .foregroundStyle(Blue.sub).padding(.horizontal, 8).padding(.vertical, 5)
+                        .glassHover(corner: 8).contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .help("Export this as a shareable image")
@@ -676,13 +660,14 @@ struct ContentView: View {
                     }
                     .foregroundStyle(Blue.ink)
                     .padding(.horizontal, 12).padding(.vertical, 7)
-                    .overlay(Rectangle().stroke(Blue.ink, lineWidth: 1.5))
+                    .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).cursorGlow()
+                .buttonStyle(.plain)
             }
             .padding(20)
-            .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: 2) }
+            .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
 
             if loading {
                 VStack(spacing: 12) {
@@ -704,9 +689,14 @@ struct ContentView: View {
                         .font(Blue.body(14)).foregroundStyle(Blue.sub)
                     Button(action: onGenerate) {
                         Text("GENERATE \(title)").font(Blue.mono(11, .bold)).tracking(1)
-                            .foregroundStyle(canGenerate ? Blue.paper : Blue.dim)
-                            .padding(.horizontal, 20).padding(.vertical, 11)
-                            .background(canGenerate ? Blue.ink : Blue.dim.opacity(0.4))
+                            .foregroundStyle(canGenerate ? Blue.ink : Blue.dim)
+                            .padding(.horizontal, 22).padding(.vertical, 12)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(canGenerate ? Blue.glassBright : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Blue.glassStroke, lineWidth: 1))
+                            .shadow(color: Color.adaptive(.clear, .white.opacity(canGenerate ? 0.06 : 0)), radius: 12)
                     }
                     .buttonStyle(.plain).disabled(!canGenerate)
                     if !canGenerate {
@@ -719,8 +709,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Blue.paper)
-        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 3))
+        .glassPanel(corner: 22)
     }
 
     private func connected(_ seat: Seat) -> Bool {
@@ -739,13 +728,27 @@ struct ContentView: View {
     }
 
     private var directiveInput: some View {
+      VStack(alignment: .trailing, spacing: 6) {
+        // Quiet session usage readout, right-aligned just above the input pill.
+        if store.sessionInputTokens + store.sessionOutputTokens > 0 {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt").font(.system(size: 8, weight: .bold))
+                Text("\(tokenString)").font(Blue.mono(9))
+                Text("·").font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                Text("~\(costString)").font(Blue.mono(9))
+            }
+            .foregroundStyle(Blue.sub)
+            .padding(.trailing, 6)
+            .help("Session tokens · estimated cost (you pay providers directly)")
+        }
+
         VStack(alignment: .leading, spacing: 12) {
             if let img = pickedImage {
                 HStack(spacing: 10) {
                     Button { showImagePreview = true } label: {
                         Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
                             .frame(width: 46, height: 46).clipped()
-                            .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                             .overlay(alignment: .bottomTrailing) {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                                     .font(.system(size: 8, weight: .bold))
@@ -768,47 +771,48 @@ struct ContentView: View {
                 }
             }
 
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 Button(action: pickImage) {
-                    Image(systemName: "photo").font(.system(size: 13)).foregroundStyle(Blue.ink)
-                        .frame(width: 22, height: 22)
+                    Image(systemName: "photo").font(.system(size: 15)).foregroundStyle(Blue.sub)
+                        .frame(width: 30, height: 30)
+                        .glassHover(corner: 15)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Attach image")
                 .accessibilityLabel("Attach image")
-                ComposerTextView(text: $query, placeholder: "Enter..",
+                ComposerTextView(text: $query, placeholder: "Enter a command or prompt…",
                                  onSubmit: ask, onPasteImage: { pickedImage = $0 })
                     .frame(maxWidth: .infinity)
                     .frame(height: composerHeight)
                 Button(action: isBusy ? stop : ask) {
-                    Text(isBusy ? "STOP" : "EXECUTE").font(Blue.mono(11, .bold)).tracking(1)
-                        .foregroundStyle((isBusy || canAsk) ? Blue.paper : Blue.dim)
-                        .padding(.horizontal, 18).padding(.vertical, 5)
-                        .background(isBusy ? Blue.red : (canAsk ? Blue.ink : Blue.dim.opacity(0.4)))
+                    Image(systemName: isBusy ? "stop.fill" : "arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(isBusy ? Blue.red : (canAsk ? Blue.ink : Blue.dim))
+                        .frame(width: 36, height: 36)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .background(Blue.glassBright, in: Circle())
+                        .overlay(Circle().strokeBorder(Blue.glassStroke, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(!isBusy && !canAsk)
+                .accessibilityLabel(isBusy ? "Stop" : "Execute")
             }
         }
-        .padding(7)
-        .background(Blue.paper)
-        .overlay(Rectangle().stroke(Blue.ink, lineWidth: isDropTargeted ? 4 : 3))
-        .overlay(alignment: .topTrailing) {
-            if store.sessionInputTokens + store.sessionOutputTokens > 0 {
-                Text("Σ \(tokenString) · ~\(costString)")
-                    .font(Blue.mono(9)).foregroundStyle(Blue.sub)
-                    .padding(.horizontal, 6).background(Blue.paper)
-                    .offset(x: -16, y: -7)
-                    .help("Session tokens · estimated cost (you pay providers directly)")
-            }
-        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .background(Blue.glassBright, in: Capsule())
+        .overlay(Capsule().strokeBorder(isDropTargeted ? Blue.ink.opacity(0.4) : Blue.glassStroke,
+                                        lineWidth: isDropTargeted ? 2 : 1))
+        .shadow(color: Color.adaptive(.black.opacity(0.10), .white.opacity(0.08)), radius: 20, y: 6)
+        .shadow(color: .black.opacity(0.30), radius: 16, y: 10)
         .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
             handleImageDrop(providers)
         }
-        .sheet(isPresented: $showImagePreview) {
+      }
+      .sheet(isPresented: $showImagePreview) {
             imagePreviewSheet.preferredColorScheme(scheme)
-        }
+      }
     }
 
     @ViewBuilder private var imagePreviewSheet: some View {
@@ -820,7 +824,7 @@ struct ContentView: View {
                     Image(systemName: "xmark").font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Blue.ink)
                         .frame(width: 30, height: 30)
-                        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                         .contentShape(Rectangle())
                         .cursorGlow()
                 }
@@ -829,7 +833,7 @@ struct ContentView: View {
                 .accessibilityLabel("Close image preview")
             }
             .padding(20)
-            Rectangle().fill(Blue.ink).frame(height: 2)
+            Rectangle().fill(Blue.glassStroke).frame(height: 1)
 
             if let img = pickedImage {
                 Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
@@ -949,10 +953,64 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Sidebar mode row
+
+/// One sidebar deliberation row (ROUNDTABLE / PEER REVIEW / …). Active or hovered → a glass pill;
+/// the pill geometry is identical in both states so borders never mismatch.
+private struct ModeRow: View {
+    enum ModeState { case active, locked, button }
+    let icon: String
+    let label: String
+    let state: ModeState
+    var hint: String?
+    var action: (() -> Void)?
+    @State private var hovered = false
+
+    private var active: Bool { state == .active }
+    private var locked: Bool { state == .locked }
+
+    var body: some View {
+        let showPill = active || (hovered && action != nil && !locked)
+        let row = HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 15))
+            Text(label).font(Blue.mono(11, .bold)).tracking(1)
+            Spacer()
+            if locked { Image(systemName: "lock.fill").font(.system(size: 9)) }
+        }
+        .padding(.horizontal, 13).padding(.vertical, 10)
+        .foregroundStyle(locked ? Blue.dim : Blue.ink)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Blue.glassBright))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                .opacity(showPill ? 1 : 0)
+        }
+        // Generous outer inset so adjacent highlighted pills keep a clear gap (no collision).
+        .padding(.horizontal, 12).padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onHover { isOver in
+            guard action != nil else { return }
+            withAnimation(.easeOut(duration: 0.18)) { hovered = isOver }
+        }
+        .help(hint ?? (locked ? "Not built yet — on the roadmap"
+                              : (state == .button ? "Settings" : "Active mode: all models answer in parallel")))
+
+        if let action {
+            Button(action: action) { row }.buttonStyle(.plain)
+        } else {
+            row
+        }
+    }
+}
+
 // MARK: - Advisor panel
 
 private struct AdvisorPanel: View {
     let seat: Seat
+    /// Provider name stored with this round's answer (used for the title when the seat is unassigned).
+    var answeredProvider: String? = nil
     let answer: String?
     let peerReview: String?
     let loading: Bool
@@ -1003,14 +1061,13 @@ private struct AdvisorPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .padding(.top, 18)
 
-            DashLine().stroke(Blue.ink, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            DashLine().stroke(Blue.glassStroke, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 .frame(height: 1).padding(.vertical, hasConversation ? 8 : 12)
 
             statusLine
         }
         .padding(22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Blue.paper)
         .animation(.easeInOut(duration: 0.22), value: hasConversation)
         .onHover { panelHover = $0 }
         // A provider actually got assigned (covers both direct pick and the dup-warning Continue)
@@ -1024,7 +1081,7 @@ private struct AdvisorPanel: View {
     private var panelHeader: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
-                Text((seat.provider?.panelName ?? "—").uppercased())
+                Text((seat.provider?.panelName ?? answeredProvider ?? "—").uppercased())
                     .font(Blue.mono(hasConversation ? 13 : 18, .bold)).tracking(1).foregroundStyle(Blue.ink)
                     .lineLimit(1).minimumScaleFactor(0.7).fixedSize(horizontal: false, vertical: true)
                 if connected && !showingModelPicker { modelMenu }
@@ -1042,6 +1099,8 @@ private struct AdvisorPanel: View {
                     onResetSeat()
                 } label: {
                     Image(systemName: "arrow.uturn.backward").font(.system(size: 11)).foregroundStyle(Blue.sub)
+                        .frame(width: 26, height: 26)
+                        .glassHover(corner: 13)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1050,7 +1109,7 @@ private struct AdvisorPanel: View {
             }
         }
         .padding(.bottom, hasConversation ? 8 : 14)
-        .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: hasConversation ? 1 : 2) }
+        .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
     }
 
     /// Small, quiet menu showing the active model id — transparency, and change it anytime.
@@ -1074,13 +1133,23 @@ private struct AdvisorPanel: View {
         .accessibilityLabel("Change model")
     }
 
+    /// Status accent color drives the pill + text tint.
+    private var statusColor: Color {
+        if failed { return Blue.red }
+        if loading { return Blue.accent }
+        if hasAnswer { return Blue.ok }
+        if seat.provider == nil || !connected { return Blue.dim }
+        return Blue.warn   // standby
+    }
+
     private var statusLine: some View {
         HStack(spacing: 8) {
-            Rectangle().fill(failed ? Blue.red : Blue.ink)
-                .frame(width: hasConversation ? 6 : 8, height: hasConversation ? 6 : 8)
-            Text("STATUS: \(statusText)")
+            Circle().fill(statusColor)
+                .frame(width: 7, height: 7)
+                .shadow(color: statusColor.opacity(0.8), radius: loading ? 4 : 2)
+            Text(statusText)
                 .font(Blue.mono(hasConversation ? 9 : 11, .bold))
-                .foregroundStyle(failed ? Blue.red : Blue.ink)
+                .foregroundStyle(statusColor)
             Spacer()
             if panelHover && canRegenerate && (hasAnswer || failed) && !loading {
                 Button(action: onRegenerate) {
@@ -1131,16 +1200,16 @@ private struct AdvisorPanel: View {
                         }
                         .padding(.vertical, 10).padding(.horizontal, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(m == seat.model ? Blue.ink.opacity(0.08) : Color.clear)
+                        .background(m == seat.model ? Blue.glassBright : Color.clear)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     if idx < options.count - 1 {
-                        Rectangle().fill(Blue.ink.opacity(0.12)).frame(height: 1)
+                        Rectangle().fill(Blue.glassStroke).frame(height: 1)
                     }
                 }
             }
-            .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
 
             HStack {
                 Spacer()
@@ -1210,7 +1279,7 @@ private struct AdvisorPanel: View {
             MaskedKeyField(text: $keyDraft, onSubmit: submitKey)
                 .frame(height: 18)
                 .padding(8)
-                .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                 .disabled(validating)
                 .opacity(validating ? 0.5 : 1)
             if validating {
@@ -1296,8 +1365,11 @@ private struct ProviderPicker: View {
             }
         }
         .frame(maxWidth: 320)   // cap, but shrink to fit a narrow column instead of forcing it wider
-        .background(Blue.paper)
-        .overlay(Rectangle().stroke(open ? Blue.ink : Blue.ink.opacity(0.35), lineWidth: 2))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(open ? Blue.glassStroke.opacity(2) : Blue.glassStroke, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { h in withAnimation(.easeInOut(duration: 0.26)) { open = h } }
     }
 }
@@ -1330,7 +1402,7 @@ private struct ProviderCard: View {
                     Text(provider.panelName.uppercased())
                         .font(Blue.mono(13, .bold)).tracking(1).foregroundStyle(Blue.ink)
                     if !note.isEmpty {
-                        Text(note).font(Blue.mono(8)).tracking(0.5).foregroundStyle(Blue.dim)
+                        Text(note.uppercased()).font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.sub)
                     }
                 }
                 Spacer(minLength: 8)
@@ -1341,10 +1413,10 @@ private struct ProviderCard: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(hovered ? Blue.ink.opacity(0.06) : Color.clear)
-            .overlay(Rectangle().stroke(hovered ? Blue.ink : Blue.ink.opacity(0.22),
-                                        lineWidth: hovered ? 2 : 1.5))
-            .cursorGlow()
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(hovered ? Blue.glassBright : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Blue.glassStroke, lineWidth: hovered ? 2 : 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1624,14 +1696,29 @@ final class PasteImageTextView: NSTextView {
 private struct SettingsSheet: View {
     @Bindable var store: CouncilStore
     @Binding var appearance: String
-    @Binding var projectName: String
     var onClose: () -> Void
 
-    /// Local draft so the field can be edited (even transiently empty) without ever pushing an
-    /// empty name back to storage — an empty projectName would re-trigger the onboarding overlay.
-    @State private var projectDraft = ""
     /// Whether exported images carry the "made with Council" watermark. Default on (growth).
     @AppStorage("council.shareWatermark") private var shareWatermark = true
+    /// A council config staged for import, awaiting confirmation (it overwrites the live setup).
+    @State private var pendingImport: CouncilConfig?
+    /// A preset staged for "load" confirmation.
+    @State private var pendingPreset: CouncilConfig?
+
+    /// Settings categories shown in the left rail.
+    enum Tab: String, CaseIterable, Identifiable {
+        case models = "Models", deliberation = "Deliberation", councils = "Councils", app = "App"
+        var id: String { rawValue }
+        var icon: String {
+            switch self {
+            case .models: return "cube"
+            case .deliberation: return "arrow.triangle.branch"
+            case .councils: return "square.grid.2x2"
+            case .app: return "gearshape"
+            }
+        }
+    }
+    @State private var tab: Tab = .models
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1641,68 +1728,105 @@ private struct SettingsSheet: View {
                 Button(action: onClose) {
                     Image(systemName: "xmark").font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Blue.ink)
-                        .frame(width: 30, height: 30)
-                        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                        .frame(width: 32, height: 32)
+                        .glassHover(corner: 16)
                         .contentShape(Rectangle())
-                        .cursorGlow()
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel("Close settings")
             }
-            .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 16)
-            Rectangle().fill(Blue.ink).frame(height: 2)
+            .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 12)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    section("PROJECT") {
-                        HStack(spacing: 2) {
-                            Text("PROJECT_").font(Blue.mono(15, .bold)).foregroundStyle(Blue.ink)
-                            PlainTextField(text: $projectDraft, placeholder: "XXXXX",
-                                           fontSize: 15, weight: .bold,
-                                           filter: { String($0.replacingOccurrences(of: " ", with: "").prefix(5)) })
-                                .frame(width: 110, height: 22)
-                                .overlay(alignment: .bottom) { Rectangle().fill(Blue.ink).frame(height: 1.5) }
-                        }
-                        Text("Shown in the sidebar and used as the export filename. Max 5 characters.")
-                            .font(Blue.body(11)).foregroundStyle(Blue.sub)
+            HStack(alignment: .top, spacing: 0) {
+                // Left category rail.
+                VStack(spacing: 4) {
+                    ForEach(Tab.allCases) { t in
+                        settingsTab(t)
                     }
+                    Spacer()
+                }
+                .frame(width: 168)
+                .padding(.horizontal, 12).padding(.top, 4)
 
-                    section("APPEARANCE") {
-                        HStack(spacing: 0) {
-                            AppearanceOption(label: "LIGHT", value: "light", icon: "sun.max", appearance: $appearance)
-                            AppearanceOption(label: "DARK", value: "dark", icon: "moon", appearance: $appearance)
-                        }
-                    }
-
-                    section("SYSTEM PROMPT — ALL MODELS") {
-                        promptEditor($store.sharedSystemPrompt, placeholder: "Shared instruction…", tall: true)
-                        Button { store.sharedSystemPrompt = CouncilStore.defaultSystemPrompt } label: {
-                            Text("RESET TO DEFAULT").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.sub)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    section("PER-MODEL (OPTIONAL)") {
-                        Text("Leave empty to use the shared prompt.")
-                            .font(Blue.body(11)).foregroundStyle(Blue.sub)
-                        ForEach(store.seats) { seat in
-                            promptEditor(seatBinding(seat),
-                                         placeholder: "— shared prompt —",
-                                         label: (seat.provider?.panelName ?? "Seat \(seat.id + 1)").uppercased())
+                // Right content pane.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        switch tab {
+                        case .models:       modelsTab
+                        case .deliberation: deliberationTab
+                        case .councils:     councilsTab
+                        case .app:          appTab
                         }
                     }
+                    .padding(.horizontal, 24).padding(.vertical, 6).padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(width: 640, height: 600)
+        .background(LinearGradient(colors: [
+            Color.adaptive(Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.10, green: 0.10, blue: 0.105)),
+            Color.adaptive(Color(red: 0.92, green: 0.92, blue: 0.94), Color(red: 0.06, green: 0.06, blue: 0.065))
+        ], startPoint: .top, endPoint: .bottom))
+        .modifier(SettingsAlerts(store: store,
+                                 pendingImport: $pendingImport, pendingPreset: $pendingPreset))
+    }
 
-                    section("SAMPLING — PER MODEL (OPTIONAL)") {
-                        Text("Temperature trades focus for variety. Max tokens caps each reply. Leave on AUTO for the model's own default.")
-                            .font(Blue.body(11)).foregroundStyle(Blue.sub)
-                            .fixedSize(horizontal: false, vertical: true)
-                        ForEach(store.seats) { seat in
-                            samplingControls(for: seat)
-                        }
-                    }
+    /// One row in the left category rail.
+    private func settingsTab(_ t: Tab) -> some View {
+        Button { tab = t } label: {
+            HStack(spacing: 10) {
+                Image(systemName: t.icon).font(.system(size: 13)).frame(width: 18)
+                Text(t.rawValue).font(Blue.mono(11, .bold)).tracking(0.5)
+                Spacer()
+            }
+            .foregroundStyle(Blue.ink)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Blue.glassBright))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .opacity(tab == t ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 
-                    section("DIVERGENCE & SYNTHESIS MODEL") {
+    // MARK: Grouped tabs
+
+    @ViewBuilder private var modelsTab: some View {
+        section("SYSTEM PROMPT — ALL MODELS") {
+            promptEditor($store.sharedSystemPrompt, placeholder: "Shared instruction…", tall: true)
+            Button { store.sharedSystemPrompt = CouncilStore.defaultSystemPrompt } label: {
+                Text("RESET TO DEFAULT").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.sub)
+            }
+            .buttonStyle(.plain)
+        }
+        section("PER-MODEL PROMPT (OPTIONAL)") {
+            Text("Leave empty to use the shared prompt.")
+                .font(Blue.body(11)).foregroundStyle(Blue.sub)
+            ForEach(store.seats) { seat in
+                promptEditor(seatBinding(seat),
+                             placeholder: "— shared prompt —",
+                             label: (seat.provider?.panelName ?? "Seat \(seat.id + 1)").uppercased())
+            }
+        }
+        section("SAMPLING — PER MODEL (OPTIONAL)") {
+            Text("Temperature trades focus for variety. Max tokens caps each reply. Leave on AUTO for the model's own default.")
+                .font(Blue.body(11)).foregroundStyle(Blue.sub)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(store.seats) { seat in
+                samplingControls(for: seat)
+            }
+        }
+    }
+
+    @ViewBuilder private var deliberationTab: some View {
+        section("DIVERGENCE & SYNTHESIS MODEL") {
                         Text("These two are written by one model — it spends that provider's credit, and the analysis carries that model's lens.")
                             .font(Blue.body(11)).foregroundStyle(Blue.sub)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1718,69 +1842,122 @@ private struct SettingsSheet: View {
                                     }
                                     .padding(.vertical, 10).padding(.horizontal, 10)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(store.synthesizerSeatID == seat.id ? Blue.ink.opacity(0.08) : Color.clear)
+                                    .background(store.synthesizerSeatID == seat.id ? Blue.glassBright : Color.clear)
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 if idx < store.seats.count - 1 {
-                                    Rectangle().fill(Blue.ink.opacity(0.12)).frame(height: 1)
+                                    Rectangle().fill(Blue.glassStroke).frame(height: 1)
                                 }
                             }
                         }
-                        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                     }
 
-                    section("DEVIL'S ADVOCATE") {
-                        Text("One advisor steelmans the emerging consensus, then attacks it — mandated dissent in peer review. Off by default.")
-                            .font(Blue.body(11)).foregroundStyle(Blue.sub)
-                            .fixedSize(horizontal: false, vertical: true)
-                        VStack(spacing: 0) {
-                            advocateRow(id: -1, label: "None")
-                            Rectangle().fill(Blue.ink.opacity(0.12)).frame(height: 1)
-                            ForEach(Array(store.seats.enumerated()), id: \.element.id) { idx, seat in
-                                advocateRow(id: seat.id, label: seat.provider?.panelName ?? "Seat \(seat.id + 1)")
-                                if idx < store.seats.count - 1 {
-                                    Rectangle().fill(Blue.ink.opacity(0.12)).frame(height: 1)
-                                }
-                            }
-                        }
-                        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
-                    }
-
-                    section("SHARING") {
-                        Toggle(isOn: $shareWatermark) {
-                            Text("Show “made with Council” on exported images")
-                                .font(Blue.body(12)).foregroundStyle(Blue.ink)
-                        }
-                        .toggleStyle(.switch).tint(Blue.ink)
-                    }
-
-                    section("CONVERSATION STORAGE") {
-                        Text("Stored on this Mac — no cloud, no server.")
-                            .font(Blue.body(12)).foregroundStyle(Blue.sub)
-                        Text(store.conversationFileDisplayPath)
-                            .font(Blue.mono(10)).foregroundStyle(Blue.ink)
-                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                        Button { store.revealConversationFolder() } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "folder")
-                                Text("REVEAL IN FINDER").font(Blue.mono(10, .bold)).tracking(1)
-                            }
-                            .foregroundStyle(Blue.paper).padding(.horizontal, 14).padding(.vertical, 9).background(Blue.ink)
-                        }
-                        .buttonStyle(.plain)
+        section("DEVIL'S ADVOCATE") {
+            Text("One advisor steelmans the emerging consensus, then attacks it — mandated dissent in peer review. Off by default.")
+                .font(Blue.body(11)).foregroundStyle(Blue.sub)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 0) {
+                advocateRow(id: -1, label: "None")
+                Rectangle().fill(Blue.glassStroke).frame(height: 1)
+                ForEach(Array(store.seats.enumerated()), id: \.element.id) { idx, seat in
+                    advocateRow(id: seat.id, label: seat.provider?.panelName ?? "Seat \(seat.id + 1)")
+                    if idx < store.seats.count - 1 {
+                        Rectangle().fill(Blue.glassStroke).frame(height: 1)
                     }
                 }
-                .padding(28)
+            }
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+        }
+    }
+
+    @ViewBuilder private var councilsTab: some View {
+        section("COUNCILS") {
+                        Text("A council is your seat lineup, personas, and sampling — saved as a shareable file. No API keys are included.")
+                            .font(Blue.body(11)).foregroundStyle(Blue.sub)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 10) {
+                            councilButton("EXPORT…", filled: true) {
+                                Exporter.saveCouncil(store.currentConfig(name: "My council"))
+                            }
+                            councilButton("IMPORT…", filled: false) {
+                                if let c = Exporter.openCouncil() { pendingImport = c }
+                            }
+                        }
+                        Text("PRESETS").font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.dim)
+                            .padding(.top, 4)
+                        VStack(spacing: 0) {
+                            ForEach(Array(CouncilConfig.presets.enumerated()), id: \.element.id) { idx, preset in
+                                Button { pendingPreset = preset } label: {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(preset.name).font(Blue.mono(11, .bold)).foregroundStyle(Blue.ink)
+                                            if let d = preset.detail {
+                                                Text(d).font(Blue.body(10)).foregroundStyle(Blue.sub)
+                                            }
+                                        }
+                                        Spacer()
+                                        Image(systemName: "arrow.down.circle").font(.system(size: 12)).foregroundStyle(Blue.sub)
+                                    }
+                                    .padding(.vertical, 9).padding(.horizontal, 11)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                if idx < CouncilConfig.presets.count - 1 {
+                                    Rectangle().fill(Blue.glassStroke).frame(height: 1)
+                                }
+                            }
+                        }
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+        }
+    }
+
+    @ViewBuilder private var appTab: some View {
+        section("APPEARANCE") {
+            HStack(spacing: 0) {
+                AppearanceOption(label: "LIGHT", value: "light", icon: "sun.max", appearance: $appearance)
+                AppearanceOption(label: "DARK", value: "dark", icon: "moon", appearance: $appearance)
             }
         }
-        .frame(width: 560, height: 660)
-        .background(Blue.bg)
-        .onAppear { projectDraft = projectName }
-        .onChange(of: projectDraft) { _, new in
-            let v = String(new.prefix(5))
-            if !v.isEmpty { projectName = v }   // never write empty — that would re-open onboarding
+        section("SHARING") {
+            Toggle(isOn: $shareWatermark) {
+                Text("Show “made with Council” on exported images")
+                    .font(Blue.body(12)).foregroundStyle(Blue.ink)
+            }
+            .toggleStyle(.switch).tint(Blue.accent)
         }
+        section("CONVERSATION STORAGE") {
+            Text("Stored on this Mac — no cloud, no server.")
+                .font(Blue.body(12)).foregroundStyle(Blue.sub)
+            Text(store.conversationFileDisplayPath)
+                .font(Blue.mono(10)).foregroundStyle(Blue.ink)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            Button { store.revealConversationFolder() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                    Text("REVEAL IN FINDER").font(Blue.mono(10, .bold)).tracking(1)
+                }
+                .foregroundStyle(Blue.ink).padding(.horizontal, 14).padding(.vertical, 9).background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 10, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// EXPORT / IMPORT button in the COUNCILS section.
+    private func councilButton(_ label: String, filled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label).font(Blue.mono(10, .bold)).tracking(1)
+                .foregroundStyle(Blue.ink)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .background(filled ? Blue.glassBright : Color.clear, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
@@ -1789,6 +1966,11 @@ private struct SettingsSheet: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        // Each section is its own frosted-glass card.
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
     }
 
     private func seatBinding(_ seat: Seat) -> Binding<String> {
@@ -1810,7 +1992,7 @@ private struct SettingsSheet: View {
             }
             .padding(.vertical, 10).padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(store.devilsAdvocateSeatID == id ? Blue.ink.opacity(0.08) : Color.clear)
+            .background(store.devilsAdvocateSeatID == id ? Blue.glassBright : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1854,7 +2036,7 @@ private struct SettingsSheet: View {
                                filter: { String($0.filter(\.isNumber).prefix(6)) })
                     .frame(height: 16)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .overlay(Rectangle().stroke(Blue.ink.opacity(0.4), lineWidth: 1.5))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                 Spacer(minLength: 0)
             }
         }
@@ -1876,8 +2058,34 @@ private struct SettingsSheet: View {
                     .padding(5)
                     .frame(height: tall ? 96 : 60)
             }
-            .background(Blue.paper)
-            .overlay(Rectangle().stroke(Blue.ink, lineWidth: 1.5))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+        }
+    }
+}
+
+private struct SettingsAlerts: ViewModifier {
+    let store: CouncilStore
+    @Binding var pendingImport: CouncilConfig?
+    @Binding var pendingPreset: CouncilConfig?
+    func body(content: Content) -> some View {
+        content
+        .alert("Load this council?",
+               isPresented: Binding(get: { pendingImport != nil }, set: { if !$0 { pendingImport = nil } }),
+               presenting: pendingImport) { config in
+            Button("Load") { store.applyConfig(config); pendingImport = nil }
+            Button("Cancel", role: .cancel) { pendingImport = nil }
+        } message: { config in
+            Text("“\(config.name)” will replace your current seats, personas, and sampling. Your API keys stay untouched.")
+        }
+        .alert("Load preset?",
+               isPresented: Binding(get: { pendingPreset != nil }, set: { if !$0 { pendingPreset = nil } }),
+               presenting: pendingPreset) { preset in
+            Button("Load") { store.applyConfig(preset); pendingPreset = nil }
+            Button("Cancel", role: .cancel) { pendingPreset = nil }
+        } message: { preset in
+            Text("“\(preset.name)” will replace your current seats and personas. Keys for any models you've already set up are reused.")
         }
     }
 }
@@ -1968,7 +2176,7 @@ private struct ShareCard: View {
                 Text(question).font(Blue.body(15)).foregroundStyle(Blue.sub)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Rectangle().fill(Blue.ink).frame(height: 2)
+            Rectangle().fill(Blue.glassStroke).frame(height: 1)
             MarkdownView(text: markdown, baseSize: 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if watermark {

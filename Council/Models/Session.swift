@@ -13,9 +13,31 @@ struct Round: Codable, Identifiable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
     var costUSD: Double = 0
+    /// Which provider produced each seat's answer (seat id → panel name), so a reopened session
+    /// still shows "CLAUDE" on the panel even if that seat is currently unassigned.
+    var answerProviders: [Int: String] = [:]
 
     /// Seat ids that have a non-empty answer in this round.
     var answeredSeatIDs: Set<Int> { Set(answers.filter { !$0.value.isEmpty }.keys) }
+
+    enum CodingKeys: String, CodingKey {
+        case id, question, answers, peerReviews, divergence, synthesis
+        case inputTokens, outputTokens, costUSD, answerProviders
+    }
+    init(question: String) { self.question = question }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+        question = (try? c.decode(String.self, forKey: .question)) ?? ""
+        answers = (try? c.decode([Int: String].self, forKey: .answers)) ?? [:]
+        peerReviews = (try? c.decode([Int: String].self, forKey: .peerReviews)) ?? [:]
+        divergence = try? c.decodeIfPresent(String.self, forKey: .divergence)
+        synthesis = try? c.decodeIfPresent(String.self, forKey: .synthesis)
+        inputTokens = (try? c.decode(Int.self, forKey: .inputTokens)) ?? 0
+        outputTokens = (try? c.decode(Int.self, forKey: .outputTokens)) ?? 0
+        costUSD = (try? c.decode(Double.self, forKey: .costUSD)) ?? 0
+        answerProviders = (try? c.decode([Int: String].self, forKey: .answerProviders)) ?? [:]
+    }
 }
 
 /// A saved council session — a list of rounds plus each seat's conversation context. Stored

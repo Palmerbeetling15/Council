@@ -47,7 +47,7 @@ final class CouncilStore {
         didSet { UserDefaults.standard.set(devilsAdvocateSeatID, forKey: Self.devilKey) }
     }
 
-    private let seatsKey = "council.seats.v5"
+    private let seatsKey = "council.seats.v6"
     private static let promptKey = "council.systemPrompt"
     private static let synthKey = "council.synthesizerSeat"
     private static let devilKey = "council.devilsAdvocate"
@@ -91,9 +91,7 @@ final class CouncilStore {
            let saved = try? JSONDecoder().decode([Seat].self, from: data), saved.count == 3 {
             seats = saved
         } else {
-            // Start unassigned so every seat goes through the same PICK → SELECT MODEL → key flow
-            // (a pre-assigned key-required seat would otherwise jump straight to key entry,
-            // skipping model selection — confusing for a first run).
+            // Start unassigned → each panel shows PICK YOUR MODEL until the user chooses.
             seats = [
                 Seat(id: 0, archetype: .sage),
                 Seat(id: 1, archetype: .scientist),
@@ -112,6 +110,42 @@ final class CouncilStore {
         if let data = try? JSONEncoder().encode(seats) {
             UserDefaults.standard.set(data, forKey: seatsKey)
         }
+    }
+
+    // MARK: - Shareable council config (export / import / presets)
+
+    /// Capture the current setup as a shareable config (no keys — see CouncilConfig).
+    func currentConfig(name: String) -> CouncilConfig {
+        let seatConfigs = seats.map { s in
+            CouncilConfig.SeatConfig(provider: s.provider, model: s.model,
+                                     systemPrompt: s.systemPrompt,
+                                     temperature: s.temperature, maxTokens: s.maxTokens)
+        }
+        let synthIdx = seats.firstIndex { $0.id == synthesizerSeatID }
+        let devilIdx = seats.firstIndex { $0.id == devilsAdvocateSeatID }
+        return CouncilConfig(name: name.isEmpty ? "My council" : name,
+                             seats: seatConfigs,
+                             sharedSystemPrompt: sharedSystemPrompt,
+                             synthesizerSeatIndex: synthIdx,
+                             devilsAdvocateSeatIndex: devilIdx)
+    }
+
+    /// Apply a shared/preset config to the live seats. Keeps existing seat ids, maps each
+    /// SeatConfig onto a seat by position. Keys are untouched (loaded from Keychain as needed).
+    func applyConfig(_ config: CouncilConfig) {
+        for (i, sc) in config.seats.enumerated() where seats.indices.contains(i) {
+            seats[i].provider = sc.provider
+            seats[i].model = sc.model.isEmpty ? (sc.provider?.defaultModel ?? "") : sc.model
+            seats[i].systemPrompt = sc.systemPrompt
+            seats[i].temperature = sc.temperature
+            seats[i].maxTokens = sc.maxTokens
+        }
+        sharedSystemPrompt = config.sharedSystemPrompt.isEmpty ? sharedSystemPrompt : config.sharedSystemPrompt
+        if let s = config.synthesizerSeatIndex, seats.indices.contains(s) { synthesizerSeatID = seats[s].id }
+        if let d = config.devilsAdvocateSeatIndex, seats.indices.contains(d) { devilsAdvocateSeatID = seats[d].id }
+        else { devilsAdvocateSeatID = -1 }
+        saveSeats()
+        keyRevision += 1
     }
 
     func setSeatPrompt(_ prompt: String?, seatID: Int) {
@@ -214,6 +248,9 @@ final class CouncilStore {
     var viewedQuestion: String { viewedRound?.question ?? "" }
     func viewedAnswer(_ seatID: Int) -> String? { viewedRound?.answers[seatID] }
     func viewedPeerReview(_ seatID: Int) -> String? { viewedRound?.peerReviews[seatID] }
+    /// Provider name recorded for this seat's answer in the viewed round (for the panel title when
+    /// the seat itself is currently unassigned, e.g. a reopened session).
+    func viewedAnswerProvider(_ seatID: Int) -> String? { viewedRound?.answerProviders[seatID] }
     /// Read-only views of the current round's cross-model artifacts (used by the UI).
     var divergenceText: String? { viewedRound?.divergence }
     var synthesisText: String? { viewedRound?.synthesis }
@@ -424,6 +461,7 @@ final class CouncilStore {
         if let text = r.text, !r.cancelled {
             // Completed normally → commit the answer and extend this seat's conversation history.
             rounds[idx].answers[id] = text
+            rounds[idx].answerProviders[id] = seat.provider?.panelName
             history[id, default: []].append(.user(question))
             history[id, default: []].append(.assistant(text))
             status[id] = .idle
@@ -432,6 +470,7 @@ final class CouncilStore {
             // Stopped mid-stream: keep whatever streamed for the user to read, but do NOT append it
             // to history — feeding a truncated answer into later rounds as if complete corrupts context.
             rounds[idx].answers[id] = r.text   // partial text, or nil if nothing arrived yet
+            rounds[idx].answerProviders[id] = seat.provider?.panelName
             status[id] = .idle
         } else {
             rounds[idx].answers[id] = nil   // hard failure → drop the empty in-progress slot
