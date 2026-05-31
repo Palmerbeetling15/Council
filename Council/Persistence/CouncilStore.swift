@@ -47,7 +47,7 @@ final class CouncilStore {
         didSet { UserDefaults.standard.set(devilsAdvocateSeatID, forKey: Self.devilKey) }
     }
 
-    private let seatsKey = "council.seats.v4"
+    private let seatsKey = "council.seats.v5"
     private static let promptKey = "council.systemPrompt"
     private static let synthKey = "council.synthesizerSeat"
     private static let devilKey = "council.devilsAdvocate"
@@ -91,12 +91,13 @@ final class CouncilStore {
            let saved = try? JSONDecoder().decode([Seat].self, from: data), saved.count == 3 {
             seats = saved
         } else {
-            // Sensible defaults so every panel shows a name out of the box. The user can still
-            // change any seat's provider (↩ in the panel → PICK YOUR MODEL → 9 providers).
+            // Start unassigned so every seat goes through the same PICK → SELECT MODEL → key flow
+            // (a pre-assigned key-required seat would otherwise jump straight to key entry,
+            // skipping model selection — confusing for a first run).
             seats = [
-                Seat(id: 0, archetype: .sage,       provider: .claude),
-                Seat(id: 1, archetype: .scientist,  provider: .gemini),
-                Seat(id: 2, archetype: .strategist, provider: .openAI)
+                Seat(id: 0, archetype: .sage),
+                Seat(id: 1, archetype: .scientist),
+                Seat(id: 2, archetype: .strategist)
             ]
         }
         if let savedPrompt = UserDefaults.standard.string(forKey: Self.promptKey), !savedPrompt.isEmpty {

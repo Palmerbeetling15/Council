@@ -530,22 +530,32 @@ struct ContentView: View {
     }
 
     private var panelGrid: some View {
-        HStack(spacing: 16) {
-            ForEach(store.seats) { seat in
-                AdvisorPanel(seat: seat,
-                             answer: store.viewedAnswer(seat.id),
-                             peerReview: store.viewedPeerReview(seat.id),
-                             loading: store.isViewingLatest && store.status[seat.id] == .loading,
-                             failedMessage: panelFailure(seat.id),
-                             connected: connected(seat),
-                             canRegenerate: store.isViewingLatest,
-                             isAdversary: store.devilsAdvocateSeatID == seat.id,
-                             onValidateKey: { await store.validateAndSaveKey($0, for: seat) },
-                             onSetModel: { store.setModel($0, seatID: seat.id) },
-                             onPickProvider: { pickProvider($0, for: seat) },
-                             onResetSeat: { store.clearProvider(seatID: seat.id) },
-                             onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } })
-                    .overlay(Rectangle().stroke(Blue.ink, lineWidth: 3))
+        // Each panel is locked to exactly one-third of the available width. Without this, a seat
+        // whose content has a wide intrinsic size (the model picker) would stretch its column and
+        // push the whole window wider — so columns must never size to their content.
+        GeometryReader { geo in
+            let colWidth = max(0, (geo.size.width - 32) / 3)   // 2 gaps × 16
+            HStack(spacing: 16) {
+                ForEach(store.seats) { seat in
+                    AdvisorPanel(seat: seat,
+                                 answer: store.viewedAnswer(seat.id),
+                                 peerReview: store.viewedPeerReview(seat.id),
+                                 loading: store.isViewingLatest && store.status[seat.id] == .loading,
+                                 failedMessage: panelFailure(seat.id),
+                                 connected: connected(seat),
+                                 canRegenerate: store.isViewingLatest,
+                                 isAdversary: store.devilsAdvocateSeatID == seat.id,
+                                 onValidateKey: { await store.validateAndSaveKey($0, for: seat) },
+                                 onSetModel: { store.setModel($0, seatID: seat.id) },
+                                 onPickProvider: { pickProvider($0, for: seat) },
+                                 onResetSeat: { store.clearProvider(seatID: seat.id) },
+                                 onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } })
+                        .frame(width: colWidth)
+                        .clipped()
+                        .overlay(Rectangle().stroke(Blue.ink, lineWidth: 3))
+                        .id(seat.id)   // bind the panel's @State (begun/justPicked) to its seat
+
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -968,8 +978,11 @@ private struct AdvisorPanel: View {
 
     private var hasAnswer: Bool { answer?.isEmpty == false }
     private var failed: Bool { failedMessage != nil }
-    /// The brief post-pick step where the user picks a model and presses BEGIN.
-    private var showingModelPicker: Bool { justPicked && connected && !begun && !hasAnswer && !loading && !failed }
+    /// The model-selection step: after a provider is picked, before BEGIN. Comes BEFORE the key
+    /// step so the user chooses a model first, then (if needed) enters a key.
+    private var showingModelPicker: Bool {
+        seat.provider != nil && justPicked && !begun && !hasAnswer && !loading && !failed
+    }
 
     /// Conversation underway → shrink the header to give the answer room.
     private var hasConversation: Bool { hasAnswer || loading || failed }
@@ -1000,6 +1013,12 @@ private struct AdvisorPanel: View {
         .background(Blue.paper)
         .animation(.easeInOut(duration: 0.22), value: hasConversation)
         .onHover { panelHover = $0 }
+        // A provider actually got assigned (covers both direct pick and the dup-warning Continue)
+        // → advance to the SELECT MODEL step. Clearing it (reset → nil) drops back to the picker.
+        .onChange(of: seat.provider) { _, newValue in
+            justPicked = (newValue != nil)
+            if newValue == nil { begun = false }
+        }
     }
 
     private var panelHeader: some View {
@@ -1017,8 +1036,10 @@ private struct AdvisorPanel: View {
             Spacer()
             if seat.provider != nil && !hasConversation {
                 Button {
+                    // onResetSeat clears the provider → the onChange(of: seat.provider) handler
+                    // resets begun/justPicked. We only clear the key-entry scratch state here.
+                    keyError = nil; keyDraft = ""
                     onResetSeat()
-                    begun = false; justPicked = false; keyError = nil; keyDraft = ""
                 } label: {
                     Image(systemName: "arrow.uturn.backward").font(.system(size: 11)).foregroundStyle(Blue.sub)
                         .contentShape(Rectangle())
@@ -1080,30 +1101,11 @@ private struct AdvisorPanel: View {
         if hasAnswer || loading || failed {
             answerView   // a conversation (incl. a loaded session's answers) always wins over setup
         } else if seat.provider == nil {
-            providerPickerView
-        } else if !connected {
-            VStack(alignment: .center, spacing: 10) {
-                Text("> ENTER YOUR API KEY").font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink)
-                MaskedKeyField(text: $keyDraft, onSubmit: submitKey)
-                    .frame(height: 18)
-                    .padding(8)
-                    .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
-                    .disabled(validating)
-                    .opacity(validating ? 0.5 : 1)
-                if validating {
-                    VStack(spacing: 6) {
-                        Text("VALIDATING…").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.sub)
-                        FillBar(once: true)
-                    }
-                } else if let keyError {
-                    Text(keyError).font(Blue.mono(10)).foregroundStyle(Blue.red)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: 280)
+            providerPickerView           // 1. pick provider
         } else if showingModelPicker {
-            modelSelectionView
+            modelSelectionView           // 2. pick model (then BEGIN)
+        } else if !connected {
+            keyEntryView                 // 3. key — only if BEGIN found this provider needs one
         } else {
             Text("Awaiting directive.")
                 .font(Blue.body(15)).italic().foregroundStyle(Blue.sub)
@@ -1144,12 +1146,14 @@ private struct AdvisorPanel: View {
                 Spacer()
                 Button { withAnimation(.easeInOut(duration: 0.2)) { begun = true } } label: {
                     HStack(spacing: 6) {
-                        Text("BEGIN").font(Blue.mono(11, .bold)).tracking(1)
+                        // If the chosen provider needs a key we don't have yet, BEGIN leads to key entry.
+                        Text(connected ? "BEGIN" : "CONTINUE").font(Blue.mono(11, .bold)).tracking(1)
                         Image(systemName: "arrow.right").font(.system(size: 10, weight: .bold))
                     }
                     .foregroundStyle(Blue.paper)
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .background(Blue.ink)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -1199,10 +1203,36 @@ private struct AdvisorPanel: View {
         ProviderPicker(onPick: pick)
     }
 
+    /// Key entry — reached only after a model is chosen and BEGIN finds the provider needs a key.
+    private var keyEntryView: some View {
+        VStack(alignment: .center, spacing: 10) {
+            Text("> ENTER YOUR API KEY").font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink)
+            MaskedKeyField(text: $keyDraft, onSubmit: submitKey)
+                .frame(height: 18)
+                .padding(8)
+                .overlay(Rectangle().stroke(Blue.ink, lineWidth: 2))
+                .disabled(validating)
+                .opacity(validating ? 0.5 : 1)
+            if validating {
+                VStack(spacing: 6) {
+                    Text("VALIDATING…").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.sub)
+                    FillBar(once: true)
+                }
+            } else if let keyError {
+                Text(keyError).font(Blue.mono(10)).foregroundStyle(Blue.red)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: 280)
+    }
+
     private func pick(_ provider: LLMProvider) {
-        onPickProvider(provider)   // parent assigns (after a duplicate warning if needed)
+        // Reset the per-step flags, then let the parent assign. We do NOT set justPicked here —
+        // a duplicate-provider pick may be cancelled in the alert, so justPicked must follow the
+        // ACTUAL assignment (onModelStepReady), never the click.
         begun = false; keyError = nil; keyDraft = ""
-        justPicked = true          // so the SELECT MODEL step shows once connected
+        onPickProvider(provider)
     }
 
     private func submitKey() {
@@ -1216,8 +1246,8 @@ private struct AdvisorPanel: View {
             if let error {
                 keyError = error                 // invalid / no balance → stay, show why
             } else {
-                keyDraft = ""                    // wipe in-memory draft; model selection appears
-                justPicked = true
+                keyDraft = ""                    // wipe in-memory draft
+                begun = true                     // key valid → seat is ready (model already chosen)
             }
         }
     }
@@ -1265,7 +1295,7 @@ private struct ProviderPicker: View {
                 .transition(.opacity)
             }
         }
-        .frame(width: 320)
+        .frame(maxWidth: 320)   // cap, but shrink to fit a narrow column instead of forcing it wider
         .background(Blue.paper)
         .overlay(Rectangle().stroke(open ? Blue.ink : Blue.ink.opacity(0.35), lineWidth: 2))
         .onHover { h in withAnimation(.easeInOut(duration: 0.26)) { open = h } }
