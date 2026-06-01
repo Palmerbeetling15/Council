@@ -18,6 +18,9 @@ final class CouncilStore {
     var viewingRound = 0
     /// True while a divergence/synthesis round is running.
     var deliberationBusy = false
+    /// Which round index is currently generating answers/peer-reviews (nil = none). The panel
+    /// spinner keys off this so it shows on the round actually working, not just the latest.
+    var generatingRound: Int?
     /// Transient (NEVER persisted) error from the last divergence / synthesis attempt. We never
     /// write an error string into a round's content — a failed network call must not become
     /// permanent "analysis" saved to disk. Shown briefly in the canvas, cleared on retry/nav.
@@ -133,12 +136,24 @@ final class CouncilStore {
     /// Apply a shared/preset config to the live seats. Keeps existing seat ids, maps each
     /// SeatConfig onto a seat by position. Keys are untouched (loaded from Keychain as needed).
     func applyConfig(_ config: CouncilConfig) {
-        for (i, sc) in config.seats.enumerated() where seats.indices.contains(i) {
-            seats[i].provider = sc.provider
-            seats[i].model = sc.model.isEmpty ? (sc.provider?.defaultModel ?? "") : sc.model
-            seats[i].systemPrompt = sc.systemPrompt
-            seats[i].temperature = sc.temperature
-            seats[i].maxTokens = sc.maxTokens
+        for i in seats.indices {
+            if let sc = config.seats.indices.contains(i) ? config.seats[i] : nil {
+                seats[i].provider = sc.provider
+                seats[i].model = sc.model.isEmpty ? (sc.provider?.defaultModel ?? "") : sc.model
+                seats[i].systemPrompt = sc.systemPrompt
+                // Clamp imported sampling through the same bounds as the manual setters, so a
+                // hand-edited/malicious file can't set e.g. maxTokens: 100000000 or temperature: 9.
+                seats[i].temperature = sc.temperature.map { min(max($0, 0), 2) }
+                seats[i].maxTokens = sc.maxTokens.flatMap { $0 > 0 ? min($0, 64_000) : nil }
+            } else {
+                // Config specifies fewer seats than we have → clear the trailing ones rather than
+                // leaving a stale provider/persona from the previous council.
+                seats[i].provider = nil
+                seats[i].model = ""
+                seats[i].systemPrompt = nil
+                seats[i].temperature = nil
+                seats[i].maxTokens = nil
+            }
         }
         sharedSystemPrompt = config.sharedSystemPrompt.isEmpty ? sharedSystemPrompt : config.sharedSystemPrompt
         if let s = config.synthesizerSeatIndex, seats.indices.contains(s) { synthesizerSeatID = seats[s].id }
@@ -302,12 +317,15 @@ final class CouncilStore {
         let idx = rounds.count - 1
         viewingRound = idx
         clearDeliberationErrors()
+        generatingRound = idx
         for seat in keyed { status[seat.id] = .loading }
 
         await withTaskGroup(of: Void.self) { group in
             for seat in keyed {
                 let sys = systemPrompt(for: seat)
-                let messages = [ChatMessage.system(sys)] + (history[seat.id] ?? []) + [.user(prompt, image: image)]
+                // Only hand the image to models that accept it; a text-only model would 400.
+                let seatImage = (seat.provider?.supportsVision(model: seat.model) ?? false) ? image : nil
+                let messages = [ChatMessage.system(sys)] + (history[seat.id] ?? []) + [.user(prompt, image: seatImage)]
                 group.addTask { @MainActor in
                     let r = await self.streamCall(seat: seat, messages: messages) { partial in
                         self.setAnswer(idx, seat.id, partial)
@@ -316,6 +334,7 @@ final class CouncilStore {
                 }
             }
         }
+        generatingRound = nil
         saveConversation()
     }
 
@@ -325,6 +344,8 @@ final class CouncilStore {
         let answered = answeredSeats(in: idx)
         guard answered.count >= 2, rounds.indices.contains(idx) else { return }
         let pairs = answered.map { (seat: $0, answer: rounds[idx].answers[$0.id] ?? "") }
+        deliberationBusy = true
+        generatingRound = idx
         for s in answered { status[s.id] = .loading; rounds[idx].peerReviews[s.id] = "" }
 
         await withTaskGroup(of: Void.self) { group in
@@ -372,6 +393,8 @@ final class CouncilStore {
                 }
             }
         }
+        deliberationBusy = false
+        generatingRound = nil
         saveConversation()
     }
 
@@ -431,17 +454,20 @@ final class CouncilStore {
         divergenceError = nil; synthesisError = nil
         rounds[idx].answers[seatID] = ""
         status[seatID] = .loading
+        generatingRound = idx
         let messages = [ChatMessage.system(systemPrompt(for: seat))] + (history[seatID] ?? []) + [.user(q)]
         let r = await streamCall(seat: seat, messages: messages) { partial in
             self.setAnswer(idx, seatID, partial)
         }
         finishAnswer(roundIndex: idx, seat: seat, question: q, result: r)
+        generatingRound = nil
         saveConversation()
     }
 
     func cancelAll() {
         for id in status.keys where status[id] == .loading { status[id] = .idle }
         deliberationBusy = false
+        generatingRound = nil
     }
 
     // MARK: - Round helpers
@@ -525,16 +551,29 @@ final class CouncilStore {
         let client = LLMClientFactory.make(for: provider, model: seat.model,
                                            temperature: seat.temperature, maxTokens: seat.maxTokens)
         var full = "", input = 0, output = 0
+        // Coalesce token updates to ~30fps. Streaming fires hundreds of deltas/answer; pushing
+        // every one into the UI re-renders + re-parses markdown each time (O(n²)). We only flush
+        // to the UI every ~33ms, and always flush the final text after the loop.
+        let minInterval: UInt64 = 33_000_000   // 33ms in ns
+        var lastEmit: UInt64 = 0
+        var pending = false
         do {
             for try await chunk in client.stream(messages: messages, apiKey: apiKey) {
                 try Task.checkCancellation()   // Stop → exit → stream terminates → network cancels
                 switch chunk {
-                case .text(let t):         full += t; onDelta(full)
+                case .text(let t):
+                    full += t
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    if now &- lastEmit >= minInterval { lastEmit = now; pending = false; onDelta(full) }
+                    else { pending = true }
                 case .usage(let i, let o): input = i; output = o
                 }
             }
+            if pending { onDelta(full) }   // flush the last buffered text
             return (full, input, output, false, nil)
         } catch {
+            if pending { onDelta(full) }   // flush whatever streamed before the error/cancel
+
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 return (full.isEmpty ? nil : full, input, output, true, nil)
             }
@@ -622,6 +661,7 @@ final class CouncilStore {
         }
         sessions.removeAll { $0.id == s.id }
         sessions.insert(s, at: 0)
+        haystackCache[s.id] = nil   // its transcript changed → rebuild on next search
     }
 
     private func apply(_ s: Session) {
@@ -671,9 +711,19 @@ final class CouncilStore {
         if id == currentSessionID { newSession() }
     }
 
+    /// Lowercased search text per session, built once and reused so typing in the history search
+    /// doesn't rebuild every transcript on every keystroke. Invalidated when a session is saved.
+    private var haystackCache: [UUID: String] = [:]
+    private func haystack(_ s: Session) -> String {
+        if let cached = haystackCache[s.id] { return cached }
+        let h = s.searchHaystack
+        haystackCache[s.id] = h
+        return h
+    }
+
     func searchedSessions(_ query: String) -> [Session] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return q.isEmpty ? sessions : sessions.filter { $0.searchHaystack.contains(q) }
+        return q.isEmpty ? sessions : sessions.filter { haystack($0).contains(q) }
     }
 
     func revealConversationFolder() {

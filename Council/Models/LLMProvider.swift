@@ -69,6 +69,26 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         self != .ollama && self != .foundationModels
     }
 
+    /// Whether this provider's models accept image input. Used to avoid sending an image to a
+    /// text-only model (which would hard-fail with HTTP 400). For a given seat we also check the
+    /// model id, since within a provider only some models are multimodal.
+    func supportsVision(model: String) -> Bool {
+        let m = model.lowercased()
+        switch self {
+        case .claude, .openAI, .gemini:
+            return true   // current flagship Claude / GPT / Gemini families are multimodal
+        case .openRouter:
+            // OpenRouter routes to many models — assume vision only for known multimodal families.
+            return m.contains("gpt") || m.contains("claude") || m.contains("gemini") || m.contains("llama-4") || m.contains("vision")
+        case .grok:
+            return m.contains("vision") || m.contains("grok-4")
+        case .ollama:
+            return m.contains("llava") || m.contains("vision") || m.contains("gemma3") || m.contains("llama3.2-vision")
+        case .deepSeek, .mistral, .perplexity, .foundationModels:
+            return false  // text-only in practice
+        }
+    }
+
     /// Stable identifier used as the Keychain account name for this provider's key.
     var keychainAccount: String { "apikey.\(rawValue)" }
 

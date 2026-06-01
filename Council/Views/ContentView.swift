@@ -514,12 +514,13 @@ struct ContentView: View {
                     .frame(height: 16)
                     .padding(.horizontal, 18).padding(.bottom, 8)
             }
+            let results = store.searchedSessions(historyQuery)   // compute once per render
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(store.searchedSessions(historyQuery)) { session in
+                    ForEach(results) { session in
                         historyRow(session)
                     }
-                    if store.searchedSessions(historyQuery).isEmpty {
+                    if results.isEmpty {
                         Text(historyQuery.isEmpty ? "No saved directives yet." : "No matches.")
                             .font(Blue.mono(10)).foregroundStyle(Blue.dim)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -634,7 +635,7 @@ struct ContentView: View {
                                  answeredProvider: store.viewedAnswerProvider(seat.id),
                                  answer: store.viewedAnswer(seat.id),
                                  peerReview: store.viewedPeerReview(seat.id),
-                                 loading: store.isViewingLatest && store.status[seat.id] == .loading,
+                                 loading: store.generatingRound == store.viewingRound && store.status[seat.id] == .loading,
                                  failedMessage: panelFailure(seat.id),
                                  connected: connected(seat),
                                  canRegenerate: store.isViewingLatest,
