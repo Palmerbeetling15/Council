@@ -29,6 +29,26 @@ extension NSView {
     }
 }
 
+/// Behind-window blur: shows the desktop / other windows behind this app, frosted. `behindWindow`
+/// blending is what makes the whole app read as one sheet of glass. It also makes its host window
+/// transparent so the blur actually reaches the desktop instead of an opaque backing.
+struct VisualEffectBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .underWindowBackground
+        v.blendingMode = .behindWindow
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        DispatchQueue.main.async {
+            guard let w = v.window else { return }
+            w.isOpaque = false
+            w.backgroundColor = .clear         // let the vibrancy show the desktop through
+        }
+    }
+}
+
 /// "Liquid glass" palette — a deep slate, frosted surfaces, and a blue accent, with a soft
 /// light variant. Token names are kept from the old brutalist theme so call sites don't churn;
 /// only the values changed. `ink` = primary text/icons, `sub`/`dim` = secondary, `paper` = the
@@ -55,6 +75,73 @@ enum Blue {
     static func serif(_ s: CGFloat, _ w: Font.Weight = .bold) -> Font { .system(size: s, weight: w, design: .serif) }
     static func mono(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .system(size: s, weight: w, design: .monospaced) }
     static func body(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .system(size: s, weight: w) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYOUT KNOBS — live-tunable in the app. Press ⌘D to open the sliders, drag to
+// taste, then screenshot the values and tell me — I'll bake them in as defaults.
+// ─────────────────────────────────────────────────────────────────────────────
+@MainActor @Observable
+final class Layout {
+    static let shared = Layout()
+
+    var windowTopInset: CGFloat   = 7    // gap above the cards (clears the traffic lights)
+    var windowSideInset: CGFloat  = 18   // left/right margin around everything
+    var windowBottomInset: CGFloat = 10  // bottom margin
+    var sidebarGap: CGFloat       = 14   // space between sidebar and the canvas
+    var sidebarWidth: CGFloat     = 232  // sidebar card width
+    var sidebarTopInset: CGFloat  = 5    // space above NEW DIRECTIVE inside the sidebar
+    var panelGap: CGFloat         = 29   // space between the 3 advisor panels
+    var canvasRowGap: CGFloat     = 7    // space between round-bar / panels / input
+    var panelCorner: CGFloat      = 30   // advisor panel corner radius
+    var roundBarTop: CGFloat      = -6   // shift the ROUND+EXPORT row up (−) / down (+); panels unaffected
+
+    /// (label, keyPath, range) for the tuner UI.
+    var knobs: [(String, ReferenceWritableKeyPath<Layout, CGFloat>, ClosedRange<CGFloat>)] {
+        [("Window Top", \.windowTopInset, 0...80),
+         ("Window Sides", \.windowSideInset, 0...60),
+         ("Window Bottom", \.windowBottomInset, 0...60),
+         ("Sidebar Gap", \.sidebarGap, 0...60),
+         ("Sidebar Width", \.sidebarWidth, 150...360),
+         ("Sidebar Top", \.sidebarTopInset, 0...80),
+         ("Panel Gap", \.panelGap, 0...60),
+         ("Row Gap", \.canvasRowGap, -30...50),
+         ("Panel Corner", \.panelCorner, 0...40),
+         ("Round Bar Y", \.roundBarTop, -40...40)]
+    }
+}
+
+/// The live layout tuner overlay (⌘D). Drag sliders, watch the layout update instantly.
+struct LayoutTuner: View {
+    @Bindable var layout = Layout.shared
+    var onClose: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("LAYOUT TUNER").font(Blue.mono(11, .bold)).tracking(2).foregroundStyle(Blue.ink)
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)) }
+                    .buttonStyle(.plain).foregroundStyle(Blue.sub)
+            }
+            ForEach(Array(layout.knobs.enumerated()), id: \.offset) { _, knob in
+                let (label, kp, range) = knob
+                HStack(spacing: 10) {
+                    Text(label).font(Blue.mono(9)).foregroundStyle(Blue.sub)
+                        .frame(width: 92, alignment: .leading)
+                    Slider(value: Binding(get: { layout[keyPath: kp] },
+                                          set: { layout[keyPath: kp] = $0.rounded() }), in: range)
+                    Text("\(Int(layout[keyPath: kp]))").font(Blue.mono(10, .bold)).foregroundStyle(Blue.ink)
+                        .frame(width: 34, alignment: .trailing)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+        .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+        .padding(20)
+    }
 }
 
 /// Frosted-glass surface. On macOS 26+ this uses Apple's real Liquid Glass (`.glassEffect`),
@@ -208,6 +295,10 @@ struct ContentView: View {
     /// Which advisor panel the cursor is over — flattens its perspective tilt for easy reading.
     @State private var hoveredSeat: Int?
 
+    /// Live layout tuner (⌘D) — drag sliders to dial in spacing, then tell me the numbers.
+    @Bindable private var layout = Layout.shared
+    @State private var showTuner = false
+
     /// Which canvas the user is looking at: the 3-panel round, or a full-width deliberation artifact.
     enum CanvasMode { case panels, divergence, synthesis }
     @State private var canvasMode: CanvasMode = .panels
@@ -227,7 +318,14 @@ struct ContentView: View {
         // (which is what shifted the view when NEW DIRECTIVE emptied the panels).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(scheme)
+        .overlay(alignment: .topTrailing) {
+            if showTuner { LayoutTuner { showTuner = false }.preferredColorScheme(scheme) }
+        }
         .background { shortcutButtons }
+        .background {
+            Button("") { showTuner.toggle() }.keyboardShortcut("d", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0)
+        }
         .sheet(isPresented: $showSettings) {
             SettingsSheet(store: store, appearance: $appearance) { showSettings = false }
                 .preferredColorScheme(scheme)
@@ -278,17 +376,21 @@ struct ContentView: View {
     }
 
     private var mainUI: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: layout.sidebarGap) {
             if sidebarOpen {
-                sidebar.transition(.move(edge: .leading).combined(with: .opacity))
+                sidebar
+                    .overlay(alignment: .trailing) { sidebarHandle }   // stuck to the sidebar's edge
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
             mainCanvas
-                .overlay(alignment: .leading) { sidebarHandle }
+                .overlay(alignment: .leading) { if !sidebarOpen { sidebarHandle } }
         }
-        // Outer margin so the liquid background shows around the floating panels.
-        .padding(.horizontal, 16).padding(.top, 30).padding(.bottom, 16)
+        // The glass cards stay BELOW the title-bar strip (top inset clears the traffic lights);
+        // only the background extends up under them, so no card overlaps the window controls.
+        .padding(.horizontal, layout.windowSideInset)
+        .padding(.top, layout.windowTopInset).padding(.bottom, layout.windowBottomInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(gridBackground)
+        .background(gridBackground.ignoresSafeArea())
         .contentShape(Rectangle())
         .onTapGesture { resignFocus() }   // click empty space → deselect any input
     }
@@ -313,47 +415,27 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .help("Toggle sidebar")
         .accessibilityLabel(sidebarOpen ? "Collapse sidebar" : "Expand sidebar")
-        .offset(x: sidebarOpen ? -11 : 0)
+        .offset(x: sidebarOpen ? 12 : 0)   // pokes out past the sidebar's right edge
     }
 
 
     // MARK: Background grid
 
-    /// Liquid-glass backdrop. A rich MeshGradient gives the high-contrast, varied colour field the
-    /// glass panels need to actually refract — a flat fill or soft blobs give the glass nothing to
-    /// bend, which is why it looked grey before. Tuned per appearance.
+    /// Real behind-window vibrancy: the macOS desktop / windows BEHIND this app are blurred and
+    /// shown through, so the whole window reads as one piece of frosted glass. The frosted panels
+    /// then sit on top of that live, refracted backdrop — the actual "glass" you wanted.
     private var gridBackground: some View {
-        Group {
-            if #available(macOS 15.0, *) {
-                MeshGradient(width: 3, height: 3, points: [
-                    [0, 0],   [0.5, 0],   [1, 0],
-                    [0, 0.5], [0.5, 0.5], [1, 0.5],
-                    [0, 1],   [0.5, 1],   [1, 1]
-                ], colors: meshColors)
-            } else {
-                LinearGradient(colors: meshColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-            }
-        }
-        .ignoresSafeArea()
+        VisualEffectBackground()
+            .ignoresSafeArea()
     }
 
-    /// Nine mesh control colours. Dark = deep saturated jewel tones; Light = bright candy tones.
-    private var meshColors: [Color] {
-        scheme == .dark
-        ? [Color(red: 0.10, green: 0.12, blue: 0.30), Color(red: 0.18, green: 0.10, blue: 0.38), Color(red: 0.08, green: 0.16, blue: 0.40),
-           Color(red: 0.22, green: 0.10, blue: 0.42), Color(red: 0.06, green: 0.10, blue: 0.22), Color(red: 0.10, green: 0.30, blue: 0.45),
-           Color(red: 0.30, green: 0.12, blue: 0.40), Color(red: 0.08, green: 0.22, blue: 0.40), Color(red: 0.14, green: 0.34, blue: 0.50)]
-        : [Color(red: 0.62, green: 0.74, blue: 1.0),  Color(red: 0.80, green: 0.70, blue: 1.0),  Color(red: 0.66, green: 0.82, blue: 1.0),
-           Color(red: 0.86, green: 0.70, blue: 0.98), Color(red: 0.92, green: 0.88, blue: 1.0),  Color(red: 0.66, green: 0.86, blue: 0.94),
-           Color(red: 0.96, green: 0.78, blue: 0.86), Color(red: 0.72, green: 0.84, blue: 1.0),  Color(red: 0.80, green: 0.92, blue: 0.96)]
-    }
 
 
     // MARK: Sidebar
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: 14)
+            Color.clear.frame(height: layout.sidebarTopInset)
 
             Button(action: { store.newSession(); canvasMode = .panels }) {
                 HStack(spacing: 8) {
@@ -403,7 +485,7 @@ struct ContentView: View {
             modeItem("gearshape", "SETTINGS", state: .button) { showSettings = true }
                 .padding(.bottom, 6)
         }
-        .frame(width: 232)
+        .frame(width: layout.sidebarWidth)
         .frame(maxHeight: .infinity)
         .glassPanel(corner: 24)   // floating frosted card, gaps on all sides
     }
@@ -502,7 +584,7 @@ struct ContentView: View {
     }
 
     private var mainCanvas: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: layout.canvasRowGap) {
             if store.roundCount > 0 { roundNavigator }
             Group {
                 switch canvasMode {
@@ -531,7 +613,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             directiveInput
         }
-        .padding(.horizontal, 4).padding(.bottom, 4)
+        .padding(.horizontal, 4).padding(.top, 2).padding(.bottom, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -540,7 +622,7 @@ struct ContentView: View {
         // whose content has a wide intrinsic size (the model picker) would stretch its column and
         // push the whole window wider — so columns must never size to their content.
         GeometryReader { geo in
-            let gap: CGFloat = 20
+            let gap: CGFloat = layout.panelGap
             let colWidth = max(0, (geo.size.width - gap * 2) / 3)   // 2 gaps
             HStack(alignment: .top, spacing: gap) {
                 ForEach(store.seats) { seat in
@@ -561,7 +643,7 @@ struct ContentView: View {
                                  onResetSeat: { store.clearProvider(seatID: seat.id) },
                                  onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } })
                         .frame(width: colWidth, height: geo.size.height)   // all three equal height
-                        .glassPanel(corner: 22, strokeOpacity: hovered ? 2.2 : 1)
+                        .glassPanel(corner: layout.panelCorner, strokeOpacity: hovered ? 2.2 : 1)
                         .contentShape(Rectangle())   // hover only registers over the panel's own rect
                         .onHover { hoveredSeat = $0 ? seat.id : (hoveredSeat == seat.id ? nil : hoveredSeat) }
                         .id(seat.id)   // bind the panel's @State (begun/justPicked) to its seat
@@ -631,6 +713,8 @@ struct ContentView: View {
             Spacer()
             exportMenu
         }
+        // offset (not padding) so moving this row never pushes the panels — they stay put.
+        .offset(y: layout.roundBarTop)
     }
 
     /// A quiet outlined chip marking that the viewed round already has this artifact (DIV / SYN).
@@ -1808,25 +1892,7 @@ private struct SettingsSheet: View {
 
     /// One row in the left category rail.
     private func settingsTab(_ t: Tab) -> some View {
-        Button { tab = t } label: {
-            HStack(spacing: 10) {
-                Image(systemName: t.icon).font(.system(size: 13)).frame(width: 18)
-                Text(t.rawValue).font(Blue.mono(11, .bold)).tracking(0.5)
-                Spacer()
-            }
-            .foregroundStyle(Blue.ink)
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Blue.glassBright))
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
-                    .opacity(tab == t ? 1 : 0)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        SettingsTabRow(tab: t, selected: tab == t) { tab = t }
     }
 
     // MARK: Grouped tabs
@@ -2120,6 +2186,36 @@ private struct SettingsAlerts: ViewModifier {
         } message: { preset in
             Text("“\(preset.name)” will replace your current seats and personas. Keys for any models you've already set up are reused.")
         }
+    }
+}
+
+/// One row in the Settings left rail. Glass pill shows when selected OR hovered.
+private struct SettingsTabRow: View {
+    let tab: SettingsSheet.Tab
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovered = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: tab.icon).font(.system(size: 13)).frame(width: 18)
+                Text(tab.rawValue).font(Blue.mono(11, .bold)).tracking(0.5)
+                Spacer()
+            }
+            .foregroundStyle(Blue.ink)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Blue.glassBright))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .opacity(selected ? 1 : (hovered ? 0.6 : 0))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isOver in withAnimation(.easeOut(duration: 0.16)) { hovered = isOver } }
     }
 }
 
