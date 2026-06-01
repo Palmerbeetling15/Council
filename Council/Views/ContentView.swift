@@ -85,16 +85,17 @@ enum Blue {
 final class Layout {
     static let shared = Layout()
 
-    var windowTopInset: CGFloat   = 7    // gap above the cards (clears the traffic lights)
-    var windowSideInset: CGFloat  = 18   // left/right margin around everything
-    var windowBottomInset: CGFloat = 10  // bottom margin
-    var sidebarGap: CGFloat       = 14   // space between sidebar and the canvas
-    var sidebarWidth: CGFloat     = 232  // sidebar card width
+    var windowTopInset: CGFloat   = 4    // gap above the cards (clears the traffic lights)
+    var windowSideInset: CGFloat  = 12   // left/right margin around everything
+    var windowBottomInset: CGFloat = 11  // bottom margin
+    var sidebarGap: CGFloat       = 9    // space between sidebar and the canvas
+    var sidebarWidth: CGFloat     = 222  // sidebar card width
     var sidebarTopInset: CGFloat  = 5    // space above NEW DIRECTIVE inside the sidebar
-    var panelGap: CGFloat         = 29   // space between the 3 advisor panels
-    var canvasRowGap: CGFloat     = 7    // space between round-bar / panels / input
+    var panelGap: CGFloat         = 32   // space between the 3 advisor panels
+    var canvasRowGap: CGFloat     = 9    // space between round-bar / panels / input
     var panelCorner: CGFloat      = 30   // advisor panel corner radius
-    var roundBarTop: CGFloat      = -6   // shift the ROUND+EXPORT row up (−) / down (+); panels unaffected
+    var roundBarTop: CGFloat      = -6   // shift the ROUND row up (−) / down (+); panels unaffected
+    var exportY: CGFloat          = -4   // shift JUST the EXPORT button up (−) / down (+)
 
     /// (label, keyPath, range) for the tuner UI.
     var knobs: [(String, ReferenceWritableKeyPath<Layout, CGFloat>, ClosedRange<CGFloat>)] {
@@ -107,7 +108,8 @@ final class Layout {
          ("Panel Gap", \.panelGap, 0...60),
          ("Row Gap", \.canvasRowGap, -30...50),
          ("Panel Corner", \.panelCorner, 0...40),
-         ("Round Bar Y", \.roundBarTop, -40...40)]
+         ("Round Bar Y", \.roundBarTop, -40...40),
+         ("Export Y", \.exportY, -40...40)]
     }
 }
 
@@ -711,7 +713,7 @@ struct ContentView: View {
             Text(store.viewedQuestion)
                 .font(Blue.mono(10)).foregroundStyle(Blue.sub).lineLimit(1).truncationMode(.tail)
             Spacer()
-            exportMenu
+            exportMenu.offset(y: layout.exportY)   // EXPORT can be nudged independently
         }
         // offset (not padding) so moving this row never pushes the panels — they stay put.
         .offset(y: layout.roundBarTop)
