@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AppKit
+import UserNotifications
 
 /// Per-seat live state (applies to the round currently being generated).
 enum SeatStatus: Equatable { case idle, loading, failed(String) }
@@ -50,12 +51,37 @@ final class CouncilStore {
         didSet { UserDefaults.standard.set(devilsAdvocateSeatID, forKey: Self.devilKey) }
     }
 
-    private let seatsKey = "council.seats.v6"
+    private let seatsKey = "council.seats.v7"   // v7: ship default divergence personas
     private static let promptKey = "council.systemPrompt"
     private static let synthKey = "council.synthesizerSeat"
     private static let devilKey = "council.devilsAdvocate"
     static let defaultSystemPrompt =
-        "You are one of three AI advisors on a council. Answer the user's question directly, clearly, and concisely, in your own voice."
+        "You are one of several AI advisors on a council. Answer the user's question directly, clearly, and concisely, in your own voice. Be honest; never flatter."
+
+    /// Default per-seat personas. Three GENERAL-PURPOSE lenses (not domain-specific) so the council
+    /// genuinely diverges on any non-trivial question out of the box — each still gives a complete
+    /// answer, just from a different angle. Users can edit or clear these in Settings.
+    static let personaAnalyst = """
+    You are the analyst on a council of advisors. Reason from first principles: name the core \
+    variables, state your assumptions, and show the logic that leads to your answer. Give a \
+    complete, well-structured answer to the user's question, and be honest about tradeoffs and \
+    uncertainty — if the real answer is "it depends," say exactly what it depends on. Don't hedge \
+    to sound agreeable. Be concise and in your own voice.
+    """
+    static let personaPractitioner = """
+    You are the practitioner on a council of advisors. Answer from real-world experience: what \
+    actually happens in practice, the second-order effects, the practical constraints, and what \
+    most people get wrong. Give a complete, decisive answer to the user's question, grounded in how \
+    this plays out for real, and prefer concrete specifics over abstractions. Be concise and in \
+    your own voice; no flattery.
+    """
+    static let personaSkeptic = """
+    You are the skeptic on a council of advisors. Challenge the easy answer: question the framing, \
+    surface the strongest counter-case, and name the risks and failure modes the others will likely \
+    miss. Still give a complete answer to the user's question — take the position you actually find \
+    most defensible, even if it's unpopular — but make the costs and downsides explicit. Be specific \
+    and intellectually honest, never contrarian just for show. Concise, in your own voice.
+    """
 
     private static let peerReviewPrompt = """
     You are one of three AI advisors on a council and you have already given your own answer. \
@@ -94,11 +120,12 @@ final class CouncilStore {
            let saved = try? JSONDecoder().decode([Seat].self, from: data), saved.count == 3 {
             seats = saved
         } else {
-            // Start unassigned → each panel shows PICK YOUR MODEL until the user chooses.
+            // Start unassigned (each panel shows PICK YOUR MODEL) but with distinct default
+            // personas, so the council genuinely diverges from the very first question.
             seats = [
-                Seat(id: 0, archetype: .sage),
-                Seat(id: 1, archetype: .scientist),
-                Seat(id: 2, archetype: .strategist)
+                Seat(id: 0, archetype: .sage,       systemPrompt: Self.personaAnalyst),
+                Seat(id: 1, archetype: .scientist,  systemPrompt: Self.personaPractitioner),
+                Seat(id: 2, archetype: .strategist, systemPrompt: Self.personaSkeptic)
             ]
         }
         if let savedPrompt = UserDefaults.standard.string(forKey: Self.promptKey), !savedPrompt.isEmpty {
@@ -274,6 +301,62 @@ final class CouncilStore {
     var sessionInputTokens: Int { rounds.reduce(0) { $0 + $1.inputTokens } }
     var sessionOutputTokens: Int { rounds.reduce(0) { $0 + $1.outputTokens } }
     var sessionCostUSD: Double { rounds.reduce(0) { $0 + $1.costUSD } }
+
+    // MARK: Dashboard aggregates (all saved sessions; the current session joins after its first save).
+    var allTimeCostUSD: Double { sessions.reduce(0) { $0 + $1.totalCostUSD } }
+    var allTimeTokens: Int {
+        sessions.reduce(0) { acc, s in acc + s.rounds.reduce(0) { $0 + $1.inputTokens + $1.outputTokens } }
+    }
+    var thisMonthCostUSD: Double {
+        let cal = Calendar.current
+        return sessions
+            .filter { cal.isDate($0.updatedAt, equalTo: Date(), toGranularity: .month) }
+            .reduce(0) { $0 + $1.totalCostUSD }
+    }
+    var thisWeekSessions: Int {
+        let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        return sessions.filter { $0.updatedAt >= weekAgo }.count
+    }
+    var avgCostPerSession: Double { sessions.isEmpty ? 0 : allTimeCostUSD / Double(sessions.count) }
+    /// Most-used model (panel name) across all rounds, for the dashboard's "top model".
+    var topModelName: String? {
+        var counts: [String: Int] = [:]
+        for s in sessions { for r in s.rounds { for name in r.answerProviders.values { counts[name, default: 0] += 1 } } }
+        return counts.max { $0.value < $1.value }?.key
+    }
+    /// Per-session cost of the last ~12 sessions, oldest → newest, for the spend sparkline.
+    var recentSessionCosts: [Double] {
+        sessions.sorted { $0.updatedAt < $1.updatedAt }.suffix(12).map { $0.totalCostUSD }
+    }
+    /// Whether a key exists for this provider (provider-level; key-free providers are always "ready").
+    func keyExists(_ p: LLMProvider) -> Bool {
+        if !p.requiresAPIKey { return true }
+        if let k = (try? KeychainStore.read(account: p.keychainAccount)) ?? nil { return !k.isEmpty }
+        return false
+    }
+
+    // MARK: Spend alert (opt-in local notification when total spend crosses a threshold)
+    static let spendAlertOnKey = "council.spendAlertOn"
+    static let spendAlertAmtKey = "council.spendAlertAmt"
+    private static let spendAlertFiredKey = "council.spendAlertFiredAt"
+
+    /// Fire a one-time local notification when all-time spend first crosses the user's threshold.
+    /// Cheap; called from saveConversation so every spend path is covered. No-op unless opted in.
+    func checkSpendAlert() {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: Self.spendAlertOnKey) else { return }
+        let threshold = d.double(forKey: Self.spendAlertAmtKey)
+        guard threshold > 0, allTimeCostUSD >= threshold,
+              d.double(forKey: Self.spendAlertFiredKey) < threshold else { return }
+        d.set(threshold, forKey: Self.spendAlertFiredKey)   // don't fire again for this threshold
+        let content = UNMutableNotificationContent()
+        content.title = "Council — spend alert"
+        content.body = String(format: "You've spent about $%.2f, past your $%.2f alert.",
+                              allTimeCostUSD, threshold)
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "council.spendAlert", content: content, trigger: nil))
+    }
 
     private func answeredSeats(in idx: Int) -> [Seat] {
         guard rounds.indices.contains(idx) else { return [] }
@@ -662,6 +745,7 @@ final class CouncilStore {
         sessions.removeAll { $0.id == s.id }
         sessions.insert(s, at: 0)
         haystackCache[s.id] = nil   // its transcript changed → rebuild on next search
+        checkSpendAlert()
     }
 
     private func apply(_ s: Session) {

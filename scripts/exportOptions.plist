@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Developer ID = distribution OUTSIDE the Mac App Store (GitHub Releases, your site). -->
+	<key>method</key>
+	<string>developer-id</string>
+	<!-- The team your "Developer ID Application" certificate belongs to.
+	     NOTE: the project currently uses YOUR_TEAM_ID, but the only signing cert on this Mac is
+	     personal team YOUR_TEAM_ID. Set this to whichever team actually holds your Developer ID
+	     Application cert, and keep DEVELOPMENT_TEAM in the project in sync. -->
+	<key>teamID</key>
+	<string>YOUR_TEAM_ID</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

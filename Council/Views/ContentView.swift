@@ -6,6 +6,8 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import Charts
+import UserNotifications
 
 extension Color {
     /// A color that resolves to `light` or `dark` based on the active appearance,
@@ -68,9 +70,48 @@ enum Blue {
     static let accent      = Color.adaptive(Color(red: 0.20, green: 0.50, blue: 0.95), Color(red: 0.40, green: 0.66, blue: 1.0))  // the single accent
     static let glassFill   = Color.adaptive(Color.white.opacity(0.28),                Color.white.opacity(0.045)) // thin tint — let the material + backdrop show through
     static let glassStroke = Color.adaptive(Color.black.opacity(0.08),                Color.white.opacity(0.16))  // hairline edge
-    static let glassBright = Color.adaptive(Color.white.opacity(0.45),                Color.white.opacity(0.12))  // active surface fill
+    static let glassBright = Color.adaptive(Color.black.opacity(0.10),                Color.white.opacity(0.12))  // active/selected/hover fill — DARK in light mode so it actually shows on light backgrounds
     static let ok          = Color.adaptive(Color(red: 0.30, green: 0.32, blue: 0.34), Color(red: 0.88, green: 0.90, blue: 0.93)) // "done" → bright neutral
     static let warn        = Color.adaptive(Color(red: 0.55, green: 0.56, blue: 0.58), Color(red: 0.60, green: 0.62, blue: 0.66)) // "standby" → mid neutral
+
+    /// Background tints for the palette (index 0 = none → pure glass). One color = a solid wash;
+    /// two colors = a gradient mix. Kept subtle over the behind-window vibrancy.
+    struct Tint { let name: String; let colors: [Color] }
+    static let bgTints: [Tint] = [
+        Tint(name: "None",     colors: []),
+        // Solid hues:
+        Tint(name: "Blue",     colors: [Color(red: 0.20, green: 0.45, blue: 0.97)]),
+        Tint(name: "Cyan",     colors: [Color(red: 0.10, green: 0.68, blue: 0.90)]),
+        Tint(name: "Teal",     colors: [Color(red: 0.08, green: 0.60, blue: 0.58)]),
+        Tint(name: "Green",    colors: [Color(red: 0.20, green: 0.66, blue: 0.32)]),
+        Tint(name: "Lime",     colors: [Color(red: 0.58, green: 0.76, blue: 0.18)]),
+        Tint(name: "Amber",    colors: [Color(red: 0.97, green: 0.64, blue: 0.12)]),
+        Tint(name: "Orange",   colors: [Color(red: 0.96, green: 0.46, blue: 0.14)]),
+        Tint(name: "Rose",     colors: [Color(red: 0.93, green: 0.24, blue: 0.40)]),
+        Tint(name: "Pink",     colors: [Color(red: 0.95, green: 0.42, blue: 0.74)]),
+        Tint(name: "Violet",   colors: [Color(red: 0.54, green: 0.30, blue: 0.94)]),
+        Tint(name: "Indigo",   colors: [Color(red: 0.34, green: 0.32, blue: 0.88)]),
+        Tint(name: "Graphite", colors: [Color(red: 0.40, green: 0.42, blue: 0.46)]),
+        // Two-color mixes (gradients) — drawn split in the swatch, blended on the backdrop:
+        Tint(name: "Sunset",   colors: [Color(red: 0.98, green: 0.55, blue: 0.15), Color(red: 0.90, green: 0.20, blue: 0.45)]),
+        Tint(name: "Ocean",    colors: [Color(red: 0.14, green: 0.45, blue: 0.98), Color(red: 0.06, green: 0.64, blue: 0.62)]),
+        Tint(name: "Aurora",   colors: [Color(red: 0.10, green: 0.64, blue: 0.55), Color(red: 0.52, green: 0.30, blue: 0.94)]),
+        Tint(name: "Berry",    colors: [Color(red: 0.54, green: 0.24, blue: 0.88), Color(red: 0.95, green: 0.34, blue: 0.70)]),
+        Tint(name: "Ember",    colors: [Color(red: 0.88, green: 0.18, blue: 0.24), Color(red: 0.97, green: 0.62, blue: 0.16)]),
+        Tint(name: "Mint",     colors: [Color(red: 0.26, green: 0.82, blue: 0.50), Color(red: 0.10, green: 0.66, blue: 0.78)]),
+        Tint(name: "Peach",    colors: [Color(red: 0.98, green: 0.70, blue: 0.30), Color(red: 0.95, green: 0.42, blue: 0.66)]),
+        Tint(name: "Lagoon",   colors: [Color(red: 0.12, green: 0.70, blue: 0.86), Color(red: 0.18, green: 0.68, blue: 0.42)]),
+        Tint(name: "Galaxy",   colors: [Color(red: 0.28, green: 0.24, blue: 0.78), Color(red: 0.80, green: 0.26, blue: 0.70)]),
+        Tint(name: "Magma",    colors: [Color(red: 0.86, green: 0.16, blue: 0.20), Color(red: 0.97, green: 0.52, blue: 0.14)]),
+    ]
+    /// Fill style for a tint index (nil = none). Shared by the swatch and the backdrop wash.
+    static func tintStyle(_ i: Int) -> AnyShapeStyle? {
+        guard i > 0, i < bgTints.count, !bgTints[i].colors.isEmpty else { return nil }
+        let c = bgTints[i].colors
+        return c.count == 1
+            ? AnyShapeStyle(c[0])
+            : AnyShapeStyle(LinearGradient(colors: c, startPoint: .topLeading, endPoint: .bottomTrailing))
+    }
 
     static func serif(_ s: CGFloat, _ w: Font.Weight = .bold) -> Font { .system(size: s, weight: w, design: .serif) }
     static func mono(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .system(size: s, weight: w, design: .monospaced) }
@@ -219,7 +260,10 @@ struct GlassHover: ViewModifier {
             .background {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Blue.glassBright))
+                    // Adaptive tint: a slight DARK wash in light mode (so the hover box actually
+                    // shows over light backgrounds), a slight light wash in dark mode.
+                    .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .fill(Color.adaptive(.black.opacity(0.10), .white.opacity(0.14))))
                     .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous)
                         .strokeBorder(Blue.glassStroke, lineWidth: 1))
                     .opacity(hovered ? 1 : 0)
@@ -296,6 +340,7 @@ struct ContentView: View {
 
     /// Which advisor panel the cursor is over — flattens its perspective tilt for easy reading.
     @State private var hoveredSeat: Int?
+    @State private var handleHover = false
 
     /// Live layout tuner (⌘D) — drag sliders to dial in spacing, then tell me the numbers.
     @Bindable private var layout = Layout.shared
@@ -305,10 +350,23 @@ struct ContentView: View {
     enum CanvasMode { case panels, divergence, synthesis }
     @State private var canvasMode: CanvasMode = .panels
 
+    /// Top-level screen: the Home dashboard (landing) or the live roundtable.
+    enum Screen { case home, council }
+    @State private var screen: Screen = .home
+
     /// History list state.
     @State private var historyQuery = ""
     @State private var renamingSession: UUID?
     @State private var renameText = ""
+
+    /// First-run onboarding — shown once, then never again.
+    @AppStorage("council.didOnboard") private var didOnboard = false
+
+    /// Background tint index into Blue.bgTints (0 = none/pure glass). User-chosen via the palette.
+    @AppStorage("council.bgTint") private var bgTintIndex = 0
+
+    /// Ask-from-home composer text (separate from the roundtable composer's `query`).
+    @State private var homeQuery = ""
 
     private var scheme: ColorScheme { appearance == "dark" ? .dark : .light }
 
@@ -321,12 +379,25 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(scheme)
         .overlay(alignment: .topTrailing) {
+            // Dev-only live layout tuner — must be completely absent from release builds.
+            #if DEBUG
             if showTuner { LayoutTuner { showTuner = false }.preferredColorScheme(scheme) }
+            #endif
         }
         .background { shortcutButtons }
         .background {
+            // ⌘D opens the tuner — DEBUG only, so there is no affordance at all in release.
+            #if DEBUG
             Button("") { showTuner.toggle() }.keyboardShortcut("d", modifiers: .command)
                 .opacity(0).frame(width: 0, height: 0)
+            #endif
+        }
+        .overlay {
+            if !didOnboard {
+                OnboardingCard { withAnimation(.easeInOut(duration: 0.6)) { didOnboard = true } }
+                    .preferredColorScheme(scheme)
+                    .transition(.opacity.combined(with: .scale(scale: 1.03)))
+            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheet(store: store, appearance: $appearance) { showSettings = false }
@@ -363,7 +434,7 @@ struct ContentView: View {
     /// Invisible buttons that carry keyboard shortcuts (keyboard-first ethos).
     private var shortcutButtons: some View {
         Group {
-            Button("") { if !isBusy { store.newSession(); canvasMode = .panels } }
+            Button("") { if !isBusy { store.newSession(); canvasMode = .panels; screen = .council } }
                 .keyboardShortcut("n", modifiers: .command)
             Button("") { showSettings = true }
                 .keyboardShortcut(",", modifiers: .command)
@@ -384,8 +455,10 @@ struct ContentView: View {
                     .overlay(alignment: .trailing) { sidebarHandle }   // stuck to the sidebar's edge
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            mainCanvas
-                .overlay(alignment: .leading) { if !sidebarOpen { sidebarHandle } }
+            Group {
+                if screen == .home { homeDashboard } else { mainCanvas }
+            }
+            .overlay(alignment: .leading) { if !sidebarOpen { sidebarHandle } }
         }
         // The glass cards stay BELOW the title-bar strip (top inset clears the traffic lights);
         // only the background extends up under them, so no card overlaps the window controls.
@@ -410,14 +483,20 @@ struct ContentView: View {
                 .frame(width: 24, height: 48)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // Hover highlight — same feel as every other button.
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.adaptive(.black.opacity(0.10), .white.opacity(0.14)))
+                    .opacity(handleHover ? 1 : 0))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .scaleEffect(handleHover ? 1.08 : 1)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("Toggle sidebar")
         .accessibilityLabel(sidebarOpen ? "Collapse sidebar" : "Expand sidebar")
         .offset(x: sidebarOpen ? 12 : 0)   // pokes out past the sidebar's right edge
+        .onHover { h in withAnimation(.easeOut(duration: 0.18)) { handleHover = h } }
     }
 
 
@@ -427,8 +506,15 @@ struct ContentView: View {
     /// shown through, so the whole window reads as one piece of frosted glass. The frosted panels
     /// then sit on top of that live, refracted backdrop — the actual "glass" you wanted.
     private var gridBackground: some View {
-        VisualEffectBackground()
+        let style = Blue.tintStyle(bgTintIndex)
+        return VisualEffectBackground()
+            // `.color` forces the backdrop's hue to the chosen color (so blue reads blue, not the
+            // purple you got when blue merely *mixed* with a warm desktop), keeping the glass
+            // luminance/texture. A normal layer adds the color's own presence on top.
+            .overlay { if let style { Rectangle().fill(style).blendMode(.color).opacity(0.65) } }
+            .overlay { if let style { Rectangle().fill(style).opacity(0.20) } }
             .ignoresSafeArea()
+            .animation(.easeInOut(duration: 0.3), value: bgTintIndex)
     }
 
 
@@ -439,7 +525,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: layout.sidebarTopInset)
 
-            Button(action: { store.newSession(); canvasMode = .panels }) {
+            Button(action: { store.newSession(); canvasMode = .panels; screen = .council }) {
                 HStack(spacing: 8) {
                     Image(systemName: "plus").font(.system(size: 12, weight: .bold))
                     Text("NEW DIRECTIVE").font(Blue.mono(11, .bold)).tracking(1)
@@ -455,9 +541,13 @@ struct ContentView: View {
             .opacity(isBusy ? 0.4 : 1)
             .help(isBusy ? "Finish or stop the current generation first" : "Start a new directive")
 
+            modeItem("square.grid.2x2", "HOME",
+                     state: screen == .home ? .active : .button,
+                     action: { screen = .home })
+
             modeItem("point.3.connected.trianglepath.dotted", "ROUNDTABLE",
-                     state: canvasMode == .panels ? .active : .button,
-                     action: { canvasMode = .panels })
+                     state: (screen == .council && canvasMode == .panels) ? .active : .button,
+                     action: { screen = .council; canvasMode = .panels })
 
             modeItem("arrow.2.squarepath", "PEER REVIEW",
                      state: (store.canPeerReview || store.hasPeerReviewForViewedRound) ? .button : .locked,
@@ -466,21 +556,21 @@ struct ContentView: View {
                         : (store.canPeerReview ? "Models review each other's answers, anonymized"
                                                : "Ask a question first — unlocks once ≥2 models have answered"),
                      action: (store.canPeerReview || store.hasPeerReviewForViewedRound) ? {
-                        canvasMode = .panels
+                        screen = .council; canvasMode = .panels
                         if !store.hasPeerReviewForViewedRound { runRound { await store.peerReview() } }
                      } : nil)
 
             modeItem("arrow.triangle.branch", "DIVERGENCE",
-                     state: canvasMode == .divergence ? .active : (divergenceAvailable ? .button : .locked),
+                     state: (screen == .council && canvasMode == .divergence) ? .active : (divergenceAvailable ? .button : .locked),
                      hint: divergenceAvailable ? "Map where advisors agree and diverge"
                                                : "Answer ≥2 advisors first",
-                     action: divergenceAvailable ? { canvasMode = .divergence } : nil)
+                     action: divergenceAvailable ? { screen = .council; canvasMode = .divergence } : nil)
 
             modeItem("rectangle.3.group", "SYNTHESIS",
-                     state: canvasMode == .synthesis ? .active : (synthesisAvailable ? .button : .locked),
+                     state: (screen == .council && canvasMode == .synthesis) ? .active : (synthesisAvailable ? .button : .locked),
                      hint: synthesisAvailable ? "Final answer that preserves the dissent"
                                               : "Answer ≥2 advisors first",
-                     action: synthesisAvailable ? { canvasMode = .synthesis } : nil)
+                     action: synthesisAvailable ? { screen = .council; canvasMode = .synthesis } : nil)
 
             historySection
 
@@ -541,7 +631,7 @@ struct ContentView: View {
             .frame(height: 16).padding(.horizontal, 18).padding(.vertical, 10)
         } else {
             Button {
-                store.openSession(s); canvasMode = .panels
+                store.openSession(s); canvasMode = .panels; screen = .council
             } label: {
                 Text(s.title.isEmpty ? "Untitled" : s.title)
                     .font(Blue.mono(11)).lineLimit(1).truncationMode(.tail)
@@ -584,6 +674,312 @@ struct ContentView: View {
         .fixedSize()
         .disabled(!store.hasSession)
         .accessibilityLabel("Export conversation")
+    }
+
+    // MARK: Home dashboard
+
+    /// Landing screen: usage at a glance, your council, quick-start presets, recent sessions.
+    /// Entering the roundtable happens via New Directive, a preset, or a recent session.
+    private var homeDashboard: some View {
+        HStack(spacing: 10) {
+            // Everything fits in one glance — no scrolling. Hero on top, then three equal-height
+            // rows of paired cards that share the remaining height.
+            VStack(spacing: 10) {
+                HomeHero { q in query = q; canvasMode = .panels; screen = .council }
+
+                // Grid pairs cards at equal height per row (so no empty gap under the shorter card)
+                // while each row stays its natural height — tight gaps, no greedy stretch.
+                Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                    GridRow {
+                        dashCard("USAGE", fill: true) { usageTiles }
+                        dashCard("SPEND", fill: true) { spendContent }
+                    }
+                    GridRow {
+                        dashCard("YOUR COUNCIL", fill: true) { councilOverview }
+                        dashCard("QUICK START", fill: true) { quickStartList }
+                    }
+                    GridRow {
+                        dashCard("PROVIDERS", fill: true) { providersBoard }
+                        dashCard("RECENT", fill: true) { recentList }
+                    }
+                }
+
+                Spacer(minLength: 0)   // leftover height sits at the very bottom, not between rows
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(16)
+
+            colorRail.frame(width: 32).padding(.trailing, 6)
+        }
+    }
+
+    private var usageTiles: some View {
+        HStack(spacing: 0) {
+            statTile(String(format: "$%.2f", store.allTimeCostUSD), "total spent")
+            statDivider
+            statTile(String(format: "$%.2f", store.thisMonthCostUSD), "this month")
+            statDivider
+            statTile("\(store.sessions.count)", "sessions")
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// A prettier SPEND card: a smooth gradient-filled area sparkline + a clean stat row.
+    @ViewBuilder private var spendContent: some View {
+        let costs = store.recentSessionCosts
+        VStack(alignment: .leading, spacing: 12) {
+            if costs.contains(where: { $0 > 0 }) {
+                Chart {
+                    ForEach(Array(costs.enumerated()), id: \.offset) { idx, c in
+                        AreaMark(x: .value("n", idx), y: .value("cost", c))
+                            .interpolationMethod(.catmullRom)
+                            .foregroundStyle(LinearGradient(
+                                colors: [Blue.ink.opacity(0.30), Blue.ink.opacity(0.02)],
+                                startPoint: .top, endPoint: .bottom))
+                        LineMark(x: .value("n", idx), y: .value("cost", c))
+                            .interpolationMethod(.catmullRom)
+                            .foregroundStyle(Blue.ink.opacity(0.75))
+                            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
+                    }
+                }
+                .chartXAxis(.hidden).chartYAxis(.hidden)
+                .frame(height: 52)
+            } else {
+                Text("No spend yet — your sessions will chart here.")
+                    .font(Blue.mono(10)).foregroundStyle(Blue.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading).frame(height: 52)
+            }
+            HStack(spacing: 0) {
+                miniStat("\(store.thisWeekSessions)", "this week")
+                Spacer(minLength: 8)
+                miniStat(String(format: "$%.2f", store.avgCostPerSession), "avg / session")
+                Spacer(minLength: 8)
+                miniStat(store.topModelName ?? "—", "top model")
+            }
+        }
+    }
+
+    private func miniStat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink).lineLimit(1)
+            Text(label).font(Blue.mono(8)).tracking(1).foregroundStyle(Blue.dim)
+        }
+    }
+
+    private func priceLabel(_ p: LLMProvider) -> String {
+        p.requiresAPIKey ? String(format: "$%g/$%g", p.pricePer1MInput, p.pricePer1MOutput) : "free"
+    }
+
+    private var providersBoard: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)],
+                  alignment: .leading, spacing: 4) {
+            ForEach(LLMProvider.selectable) { p in
+                Button { showSettings = true } label: {
+                    HStack(spacing: 7) {
+                        Circle().fill(store.keyExists(p) ? Blue.ink : Color.clear)
+                            .overlay(Circle().strokeBorder(Blue.glassStroke))
+                            .frame(width: 6, height: 6)
+                        Text(p.panelName).font(Blue.mono(9, .bold)).foregroundStyle(Blue.ink).lineLimit(1)
+                        Spacer(minLength: 2)
+                        Text(priceLabel(p)).font(Blue.mono(8)).foregroundStyle(Blue.dim).lineLimit(1)
+                    }
+                    .padding(.vertical, 5).padding(.horizontal, 7)
+                    .glassHover(corner: 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// Vertical strip of background-tint swatches on the right edge. ~6 show at once and the NEXT
+    /// one peeks at the bottom under a soft dark fade (+ a bobbing chevron over it), so it's obvious
+    /// there are more colors to scroll to. Page stays clean.
+    private var colorRail: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 4) {
+                    ForEach(Blue.bgTints.indices, id: \.self) { i in
+                        ColorSwatch(index: i, selected: bgTintIndex == i) {
+                            withAnimation(.easeInOut(duration: 0.25)) { bgTintIndex = i }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 2)
+            }
+            .frame(maxHeight: 200)
+            // Fade the bottom of the list itself (a mask, not an overlay) → the next color dissolves
+            // softly to signal "more below", with NO left/right/bottom borders.
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0.0),
+                    .init(color: .black, location: 0.82),
+                    .init(color: .clear, location: 1.0),
+                ], startPoint: .top, endPoint: .bottom)
+            )
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func dashCard<Content: View>(_ title: String, fill: Bool = false, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.dim)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        // When fill, the card's GLASS BACKGROUND itself stretches to the row height (so paired cards
+        // are equal with no empty gap under the shorter one) — the stretch is applied BEFORE the
+        // glass, not after, which was the bug that left a blank band below the card.
+        .frame(maxWidth: .infinity, maxHeight: fill ? .infinity : nil, alignment: .topLeading)
+        .glassPanel(corner: 20)
+    }
+
+    private func statTile(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 5) {
+            Text(value).font(Blue.mono(20, .bold)).foregroundStyle(Blue.ink)
+            Text(label).font(Blue.mono(9)).tracking(1).foregroundStyle(Blue.dim)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var statDivider: some View {
+        Rectangle().fill(Blue.glassStroke).frame(width: 1, height: 30)
+    }
+
+    private func tokenString(_ n: Int) -> String {
+        n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+    }
+
+    private func personaLabel(_ seat: Seat) -> String {
+        switch seat.id {
+        case 0: return "Analyst"
+        case 1: return "Practitioner"
+        case 2: return "Skeptic"
+        default: return "Seat \(seat.id + 1)"
+        }
+    }
+
+    private func personaDescriptor(_ seat: Seat) -> String {
+        switch seat.id {
+        case 0: return "reasons from first principles"
+        case 1: return "grounded in what works in practice"
+        case 2: return "challenges the easy answer"
+        default: return "your custom advisor"
+        }
+    }
+
+    private var councilOverview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(store.seats) { seat in
+                HStack(alignment: .center, spacing: 10) {
+                    Circle().fill(store.hasKey(seat) ? Blue.ink : Color.clear)
+                        .overlay(Circle().strokeBorder(Blue.glassStroke))
+                        .frame(width: 7, height: 7)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 8) {
+                            Text(personaLabel(seat).uppercased()).font(Blue.mono(10, .bold)).foregroundStyle(Blue.ink)
+                            Text(personaDescriptor(seat)).font(Blue.body(10)).foregroundStyle(Blue.dim).lineLimit(1)
+                        }
+                        HStack(spacing: 6) {
+                            Text(seat.provider?.panelName ?? "Not set")
+                                .font(Blue.mono(9)).foregroundStyle(seat.provider == nil ? Blue.dim : Blue.sub)
+                            if seat.provider != nil, !seat.model.isEmpty {
+                                Text("·").font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                                Text(seat.model).font(Blue.mono(9)).foregroundStyle(Blue.dim).lineLimit(1)
+                            }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            Button(action: { showSettings = true }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 9, weight: .bold))
+                    Text("CONFIGURE").font(Blue.mono(9, .bold)).tracking(1)
+                }
+                .foregroundStyle(Blue.sub)
+                .padding(.vertical, 6).padding(.horizontal, 9)
+                .glassHover(corner: 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).padding(.top, 2)
+        }
+    }
+
+    private var quickStartList: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(CouncilConfig.presets.enumerated()), id: \.offset) { _, preset in
+                Button(action: {
+                    store.applyConfig(preset); store.newSession(); canvasMode = .panels; screen = .council
+                }) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(preset.name).font(Blue.mono(10, .bold)).foregroundStyle(Blue.ink)
+                        Text(preset.detail ?? "").font(Blue.body(10)).foregroundStyle(Blue.dim).lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 7).padding(.horizontal, 10)
+                    .glassHover(corner: 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var recentList: some View {
+        Group {
+            if store.sessions.isEmpty {
+                Text("No sessions yet — pick a question from the hero above to begin.")
+                    .font(Blue.mono(10)).foregroundStyle(Blue.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(spacing: 4) {
+                    ForEach(store.sessions.prefix(4)) { s in
+                        Button(action: { store.openSession(s); canvasMode = .panels; screen = .council }) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 10) {
+                                    Text(s.title.isEmpty ? "Untitled" : s.title)
+                                        .font(Blue.mono(11, .bold)).foregroundStyle(Blue.ink).lineLimit(1)
+                                    Spacer()
+                                    Text(relativeDate(s.updatedAt)).font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                                    Text(String(format: "$%.2f", s.totalCostUSD))
+                                        .font(Blue.mono(9)).foregroundStyle(Blue.sub)
+                                        .frame(width: 46, alignment: .trailing)
+                                }
+                                Text(sessionPreview(s))
+                                    .font(Blue.body(10)).foregroundStyle(Blue.dim)
+                                    .lineLimit(1).truncationMode(.tail)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(.vertical, 7).padding(.horizontal, 10)
+                            .glassHover(corner: 9)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A one-line preview of a session — its first advisor answer (or the question if none yet).
+    private func sessionPreview(_ s: Session) -> String {
+        for r in s.rounds {
+            for a in r.answers.values where !a.isEmpty {
+                return String(a.prefix(100)).replacingOccurrences(of: "\n", with: " ")
+            }
+            if !r.question.isEmpty { return r.question }
+        }
+        return "—"
+    }
+
+    private func relativeDate(_ d: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: d, relativeTo: Date())
     }
 
     private var mainCanvas: some View {
@@ -1820,6 +2216,11 @@ private struct SettingsSheet: View {
 
     /// Whether exported images carry the "made with Council" watermark. Default on (growth).
     @AppStorage("council.shareWatermark") private var shareWatermark = true
+    /// Spend alert: notify once when all-time spend crosses this dollar threshold.
+    @AppStorage("council.spendAlertOn") private var spendAlertOn = false
+    @AppStorage("council.spendAlertAmt") private var spendAlertAmt = 10.0
+    /// Mirror the chosen background tint so the sheet harmonizes with the app behind it.
+    @AppStorage("council.bgTint") private var bgTintIndex = 0
     /// A council config staged for import, awaiting confirmation (it overwrites the live setup).
     @State private var pendingImport: CouncilConfig?
     /// A preset staged for "load" confirmation.
@@ -1871,7 +2272,7 @@ private struct SettingsSheet: View {
 
                 // Right content pane.
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
                         switch tab {
                         case .models:       modelsTab
                         case .deliberation: deliberationTab
@@ -1879,16 +2280,25 @@ private struct SettingsSheet: View {
                         case .app:          appTab
                         }
                     }
-                    .padding(.horizontal, 24).padding(.vertical, 6).padding(.bottom, 24)
+                    .padding(.horizontal, 20).padding(.vertical, 4).padding(.bottom, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
         .frame(width: 640, height: 600)
-        .background(LinearGradient(colors: [
-            Color.adaptive(Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.10, green: 0.10, blue: 0.105)),
-            Color.adaptive(Color(red: 0.92, green: 0.92, blue: 0.94), Color(red: 0.06, green: 0.06, blue: 0.065))
-        ], startPoint: .top, endPoint: .bottom))
+        .background {
+            ZStack {
+                LinearGradient(colors: [
+                    Color.adaptive(Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.10, green: 0.10, blue: 0.105)),
+                    Color.adaptive(Color(red: 0.92, green: 0.92, blue: 0.94), Color(red: 0.06, green: 0.06, blue: 0.065))
+                ], startPoint: .top, endPoint: .bottom)
+                // Harmonize with the app's chosen background tint (same hue recipe as the backdrop).
+                if let s = Blue.tintStyle(bgTintIndex) {
+                    Rectangle().fill(s).blendMode(.color).opacity(0.5)
+                    Rectangle().fill(s).opacity(0.12)
+                }
+            }
+        }
         .modifier(SettingsAlerts(store: store,
                                  pendingImport: $pendingImport, pendingPreset: $pendingPreset))
     }
@@ -2030,6 +2440,36 @@ private struct SettingsSheet: View {
             }
             .toggleStyle(.switch).tint(Blue.accent)
         }
+        section("SPEND ALERT") {
+            Toggle(isOn: $spendAlertOn) {
+                Text("Notify me once my total spend crosses a threshold")
+                    .font(Blue.body(12)).foregroundStyle(Blue.ink)
+            }
+            .toggleStyle(.switch).tint(Blue.accent)
+            .onChange(of: spendAlertOn) { _, on in
+                if on {
+                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+                }
+            }
+            if spendAlertOn {
+                HStack(spacing: 8) {
+                    Text("Alert at").font(Blue.body(12)).foregroundStyle(Blue.sub)
+                    Text("$").font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink)
+                    TextField("10", value: $spendAlertAmt, format: .number)
+                        .textFieldStyle(.plain)
+                        .font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink)
+                        .frame(width: 60)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(Color.adaptive(.black.opacity(0.05), .black.opacity(0.22)),
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    Text("total").font(Blue.body(12)).foregroundStyle(Blue.sub)
+                    Spacer()
+                }
+                Text("Estimated spend across all sessions (you pay providers directly).")
+                    .font(Blue.mono(10)).foregroundStyle(Blue.dim)
+            }
+        }
         section("CONVERSATION STORAGE") {
             Text("Stored on this Mac — no cloud, no server.")
                 .font(Blue.body(12)).foregroundStyle(Blue.sub)
@@ -2063,15 +2503,16 @@ private struct SettingsSheet: View {
     }
 
     @ViewBuilder private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(title).font(Blue.mono(10, .bold)).tracking(2).foregroundStyle(Blue.sub)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        // Each section is its own frosted-glass card.
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(14)
+        // Neutral card (NO material — material sampled the warm desktop behind the sheet and
+        // turned these cards brown). A flat adaptive lift keeps them clean in both modes.
+        .background(Color.adaptive(.black.opacity(0.045), .white.opacity(0.05)),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
     }
 
@@ -2160,8 +2601,8 @@ private struct SettingsSheet: View {
                     .padding(5)
                     .frame(height: tall ? 96 : 60)
             }
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Color.adaptive(.black.opacity(0.05), .black.opacity(0.22)),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
         }
     }
@@ -2274,6 +2715,319 @@ private struct FillBar: View {
 }
 
 /// A blinking block caret shown at the tail of a streaming answer — terminal feel.
+/// Lower-right triangle — used to paint half of a two-color swatch (the other half shows underneath).
+private struct DiagonalSplit: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.maxX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Diagonal slash — marks the "None" swatch as "no tint / default".
+private struct Slash: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX + r.width * 0.22, y: r.maxY - r.height * 0.22))
+        p.addLine(to: CGPoint(x: r.maxX - r.width * 0.22, y: r.minY + r.height * 0.22))
+        return p
+    }
+}
+
+/// One background-tint swatch in the color rail. Grows on hover (so it reads as selectable) and
+/// wears a ring when active. None = slashed outline; one color = solid; two colors = a split disc
+/// (half/half) so it's obvious it's a mix.
+private struct ColorSwatch: View {
+    let index: Int
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    @ViewBuilder private var fill: some View {
+        let colors = Blue.bgTints[index].colors
+        if colors.isEmpty {
+            Circle().fill(Color.clear).overlay(Slash().stroke(Blue.dim, lineWidth: 1.5))
+        } else if colors.count == 1 {
+            Circle().fill(colors[0])
+        } else {
+            ZStack {
+                Rectangle().fill(colors[0])
+                DiagonalSplit().fill(colors[1])
+            }
+            .clipShape(Circle())
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            fill
+                .frame(width: 18, height: 18)
+                .overlay(Circle().strokeBorder(selected ? Blue.ink : Blue.glassStroke,
+                                               lineWidth: selected ? 2.5 : 1))
+                .scaleEffect(hovered ? 1.4 : (selected ? 1.12 : 1.0))
+                .shadow(color: .black.opacity(hovered ? 0.25 : 0), radius: 3)
+                .frame(width: 30, height: 30)          // generous circular hit area — easy to click
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(Blue.bgTints[index].name)
+        .onHover { h in withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) { hovered = h } }
+    }
+}
+
+/// Ambient "three advisors" motif — three orbs slowly orbiting while breathing in and out
+/// (converge → diverge), embodying the council. Pure decoration; drives the home hero's life.
+private struct AdvisorOrbs: View {
+    var body: some View {
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let r = 13.0 + sin(t * 0.7) * 9.0          // breathe: converge ↔ diverge
+            ZStack {
+                ForEach(0..<3, id: \.self) { i in
+                    let a = Double(i) / 3.0 * 2.0 * .pi + t * 0.45   // slow rotation
+                    Circle()
+                        .fill(Blue.ink.opacity(0.9 - Double(i) * 0.14))
+                        .frame(width: 13, height: 13)
+                        .offset(x: CGFloat(cos(a) * r), y: CGFloat(sin(a) * r))
+                        .shadow(color: Blue.ink.opacity(0.25), radius: 4)
+                }
+            }
+            .frame(width: 76, height: 76)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The home hero — the living top of the dashboard. The ambient orbs + a rotating example directive
+/// (click to start it) + a rotating ethos line. Gives the otherwise-static dashboard a pulse.
+private struct HomeHero: View {
+    var onPick: (String) -> Void
+    @State private var exIndex = 0
+    @State private var ethIndex = 0
+
+    private let examples = [
+        "Should I take the job offer or keep looking?",
+        "How should I prioritize my week?",
+        "What am I missing in this plan?",
+        "Is now a good time to make this purchase, or should I wait?",
+        "Should I learn a new skill or go deeper on one I have?",
+        "Rewrite this paragraph to be sharper and shorter.",
+        "What are the trade-offs of renting versus buying?",
+        "How do I give difficult feedback without burning the bridge?",
+        "Should I focus on one project or keep several going?",
+        "What would make this idea stronger?",
+        "How do I structure this decision I'm stuck on?",
+        "What questions should I be asking that I'm not?",
+        "Is it better to specialize or stay a generalist?",
+        "How can I make this message clearer and more persuasive?",
+        "What are the strongest arguments against my current plan?",
+        "Should I automate this or just do it manually for now?",
+        "How do I weigh a stable option against a riskier one?",
+        "What's a reasonable way to split shared costs fairly?",
+        "How should I spend the first 90 days in a new role?",
+        "Is this goal realistic for the time I have?",
+        "What are the second-order effects of this choice?",
+        "How do I say no to this without damaging the relationship?",
+        "Should I ship the simple version now or wait for the full one?",
+        "What's the best way to learn this topic from scratch?",
+        "How do I tell if this is worth my time?",
+        "What would I regret not trying a year from now?",
+        "How should I prepare for this conversation?",
+        "Is this feedback worth acting on, or should I let it go?",
+        "What's a fair price to ask for this?",
+        "How do I break this big task into manageable steps?",
+        "Should I delegate this or keep it myself?",
+        "What assumptions am I making that might be wrong?",
+        "How do I balance speed and quality here?",
+        "What's the simplest version of this that still works?",
+        "How do I decide between two good options?",
+        "What's the risk I'm underestimating?",
+        "How can I make this routine easier to stick to?",
+        "Should I keep investing in this or cut my losses?",
+        "How do I make a strong first impression here?",
+        "What would an outsider notice about this right away?",
+        "How do I phrase this so it lands well?",
+        "Is this the right problem to be solving?",
+        "How should I think about this trade-off?",
+        "What's a good way to test this before committing?",
+        "How do I stay focused when everything feels urgent?",
+        "What would make this plan more resilient?",
+        "Should I optimize this now or leave it for later?",
+        "How do I get unstuck on this?",
+        "What's the honest case for and against this?",
+        "How do I know when this is good enough?",
+    ]
+    private let ethos = [
+        "Disagreement is the signal.",
+        "Many minds answer — you decide.",
+        "Blind peer review keeps them honest.",
+        "One question, several lenses.",
+        "The council never picks a winner for you.",
+    ]
+
+    var body: some View {
+        HStack(spacing: 18) {
+            AdvisorOrbs().frame(width: 76, height: 76)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("COUNCIL").font(Blue.mono(17, .bold)).tracking(6).foregroundStyle(Blue.ink)
+                Button { onPick(examples[exIndex]) } label: {
+                    HStack(spacing: 9) {
+                        Text("“\(examples[exIndex])”")
+                            .font(Blue.body(14)).foregroundStyle(Blue.sub)
+                            .lineLimit(1).truncationMode(.tail)
+                        Image(systemName: "arrow.right").font(.system(size: 11, weight: .bold)).foregroundStyle(Blue.sub)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .id(exIndex)
+                .transition(.opacity)
+                .help("Start a directive with this question")
+                Text(ethos[ethIndex])
+                    .font(Blue.mono(10)).tracking(1).foregroundStyle(Blue.dim)
+                    .id(100 + ethIndex)
+                    .transition(.opacity)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(corner: 20)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6))
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    exIndex = (exIndex + 1) % examples.count
+                    ethIndex = (ethIndex + 1) % ethos.count
+                }
+            }
+        }
+    }
+}
+
+/// Insertion transition: focuses in out of a blur while scaling up — used for the onboarding card.
+private struct RevealBlur: ViewModifier {
+    let p: Double   // 0 = hidden, 1 = shown
+    func body(content: Content) -> some View {
+        content
+            .blur(radius: (1 - p) * 16)
+            .scaleEffect(0.90 + p * 0.10)
+            .offset(y: (1 - p) * 18)
+            .opacity(p)
+    }
+}
+private extension AnyTransition {
+    static var revealBlur: AnyTransition { .modifier(active: RevealBlur(p: 0), identity: RevealBlur(p: 1)) }
+}
+
+/// The CONTINUE button. Not blue — on hover it simply fills solid black, label flips to white.
+private struct OnboardingEnterButton: View {
+    var action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("CONTINUE")
+                .font(Blue.mono(11, .bold)).tracking(3)
+                .foregroundStyle(hovered ? .white : Blue.ink)
+                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                .background {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(hovered ? Color.black : Blue.glassBright)
+                }
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke))
+        }
+        .buttonStyle(.plain)
+        .onHover { h in withAnimation(.easeOut(duration: 0.2)) { hovered = h } }
+    }
+}
+
+/// First-run onboarding — shown once (gated by @AppStorage "council.didOnboard"). Two beats:
+/// (1) just the COUNCIL wordmark fades up over a frosted backdrop; (2) tapping anywhere reveals
+/// the full explainer card. Lowers BYO-key friction ("one key is enough"). No canvas clutter.
+private struct OnboardingCard: View {
+    var dismiss: () -> Void
+    @State private var appeared = false   // initial frost + wordmark fade
+    @State private var revealed = false   // false = wordmark only, true = full card
+
+    private func bullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Text("·").font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink)
+            Text(text).font(Blue.body(12)).foregroundStyle(Blue.sub)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            // Frosted, dimmed backdrop — the whole app blurs behind. Tap to advance / dismiss.
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(Color.black.opacity(0.18))
+                .opacity(appeared ? 1 : 0)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if revealed { dismiss() }
+                    else { withAnimation(.spring(response: 0.9, dampingFraction: 0.84)) { revealed = true } }
+                }
+
+            if !revealed {
+                // BEAT 1 — just the wordmark + a quiet hint.
+                VStack(spacing: 16) {
+                    Text("COUNCIL")
+                        .font(Blue.mono(34, .bold)).tracking(12).foregroundStyle(Blue.ink)
+                    Text("tap anywhere to begin")
+                        .font(Blue.mono(10)).tracking(3).foregroundStyle(Blue.dim)
+                }
+                .scaleEffect(appeared ? 1 : 0.94)
+                .blur(radius: appeared ? 0 : 14)
+                .opacity(appeared ? 1 : 0)
+                .transition(.opacity.combined(with: .scale(scale: 1.08)))
+            } else {
+                // BEAT 2 — the full explainer card.
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("COUNCIL").font(Blue.mono(13, .bold)).tracking(5).foregroundStyle(Blue.ink)
+                    Text("Parallel answers. Honest disagreement. Your call.")
+                        .font(Blue.body(13)).foregroundStyle(Blue.sub)
+                        .padding(.top, 6)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 11) {
+                        bullet("Ask once — your advisors answer in parallel, then critique each other.")
+                        bullet("Bring your own API keys. They stay in your Mac's Keychain — never sent anywhere but the model.")
+                        bullet("100% local. No account, no server, no telemetry.")
+                    }
+                    .padding(.top, 20)
+
+                    Text("One key is enough to begin — pick a model in any panel to start.")
+                        .font(Blue.mono(11)).foregroundStyle(Blue.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 18)
+
+                    OnboardingEnterButton(action: dismiss)
+                        .padding(.top, 22)
+                }
+                .padding(28)
+                .frame(width: 420, alignment: .leading)
+                .glassPanel(corner: 24)
+                .transition(.revealBlur)
+            }
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) { appeared = true }
+        }
+        // Esc dismisses (from either beat).
+        .background {
+            Button("", action: dismiss).keyboardShortcut(.escape, modifiers: [])
+                .opacity(0).frame(width: 0, height: 0)
+        }
+    }
+}
+
 private struct StreamingCaret: View {
     @State private var on = true
     var body: some View {
