@@ -390,9 +390,6 @@ struct ContentView: View {
 
     /// Background tint index into Blue.bgTints (0 = none/pure glass). User-chosen via the palette.
     @AppStorage("council.bgTint") private var bgTintIndex = 0
-    /// Performance mode: material instead of Liquid Glass + opaque (no desktop-through) window.
-    /// Off by default — the full beautiful glass. A toggle for users on weaker machines.
-    @AppStorage("council.liteMode") private var liteMode = false
 
     /// Ask-from-home composer text (separate from the roundtable composer's `query`).
     @State private var homeQuery = ""
@@ -779,7 +776,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading).frame(height: 52)
             }
             HStack(spacing: 0) {
-                miniStat("\(store.thisWeekSessions)", "this week")
+                miniStat(String(format: "$%.2f", store.thisWeekCostUSD), "this week")
                 Spacer(minLength: 8)
                 miniStat(String(format: "$%.2f", store.avgCostPerSession), "avg / session")
                 Spacer(minLength: 8)
@@ -868,10 +865,6 @@ struct ContentView: View {
 
     private var statDivider: some View {
         Rectangle().fill(Blue.glassStroke).frame(width: 1, height: 30)
-    }
-
-    private func tokenString(_ n: Int) -> String {
-        n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
     }
 
     private func personaLabel(_ seat: Seat) -> String {
@@ -2314,10 +2307,10 @@ private struct SettingsSheet: View {
                     Color.adaptive(Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.10, green: 0.10, blue: 0.105)),
                     Color.adaptive(Color(red: 0.92, green: 0.92, blue: 0.94), Color(red: 0.06, green: 0.06, blue: 0.065))
                 ], startPoint: .top, endPoint: .bottom)
-                // Harmonize with the app's chosen background tint (same hue recipe as the backdrop).
+                // Harmonize with the app's chosen background tint (plain blend — matches the main
+                // backdrop and avoids the costly .color blend mode).
                 if let s = Blue.tintStyle(bgTintIndex) {
-                    Rectangle().fill(s).blendMode(.color).opacity(0.5)
-                    Rectangle().fill(s).opacity(0.12)
+                    Rectangle().fill(s).opacity(0.4)
                 }
             }
         }
@@ -2460,7 +2453,7 @@ private struct SettingsSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Reduce glass for performance")
                         .font(Blue.body(12)).foregroundStyle(Blue.ink)
-                    Text("Uses a lighter material and an opaque window (no desktop-through). Turn on if scrolling feels heavy on your Mac.")
+                    Text("Uses a lighter frosted material instead of real Liquid Glass. Turn on if scrolling feels heavy on your Mac.")
                         .font(Blue.mono(10)).foregroundStyle(Blue.dim)
                 }
             }
@@ -2482,7 +2475,11 @@ private struct SettingsSheet: View {
             .onChange(of: spendAlertOn) { _, on in
                 if on {
                     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+                    CouncilStore.rearmSpendAlert()   // re-enabling should be able to fire again
                 }
+            }
+            .onChange(of: spendAlertAmt) { _, _ in
+                CouncilStore.rearmSpendAlert()        // a new threshold re-arms the one-shot
             }
             if spendAlertOn {
                 HStack(spacing: 8) {

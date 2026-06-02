@@ -314,18 +314,15 @@ final class CouncilStore {
 
     // MARK: Dashboard aggregates (all saved sessions; the current session joins after its first save).
     var allTimeCostUSD: Double { sessions.reduce(0) { $0 + $1.totalCostUSD } }
-    var allTimeTokens: Int {
-        sessions.reduce(0) { acc, s in acc + s.rounds.reduce(0) { $0 + $1.inputTokens + $1.outputTokens } }
-    }
     var thisMonthCostUSD: Double {
         let cal = Calendar.current
         return sessions
             .filter { cal.isDate($0.updatedAt, equalTo: Date(), toGranularity: .month) }
             .reduce(0) { $0 + $1.totalCostUSD }
     }
-    var thisWeekSessions: Int {
+    var thisWeekCostUSD: Double {
         let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-        return sessions.filter { $0.updatedAt >= weekAgo }.count
+        return sessions.filter { $0.updatedAt >= weekAgo }.reduce(0) { $0 + $1.totalCostUSD }
     }
     var avgCostPerSession: Double { sessions.isEmpty ? 0 : allTimeCostUSD / Double(sessions.count) }
     /// Most-used model (panel name) across all rounds, for the dashboard's "top model".
@@ -349,6 +346,12 @@ final class CouncilStore {
     static let spendAlertAmtKey = "council.spendAlertAmt"
     private static let spendAlertFiredKey = "council.spendAlertFiredAt"
 
+    /// Re-arm the spend alert (called when the user re-enables it or changes the threshold) so a
+    /// freshly-configured alert can fire again even if it fired for an earlier threshold.
+    static func rearmSpendAlert() {
+        UserDefaults.standard.removeObject(forKey: spendAlertFiredKey)
+    }
+
     /// Fire a one-time local notification when all-time spend first crosses the user's threshold.
     /// Cheap; called from saveConversation so every spend path is covered. No-op unless opted in.
     func checkSpendAlert() {
@@ -357,14 +360,20 @@ final class CouncilStore {
         let threshold = d.double(forKey: Self.spendAlertAmtKey)
         guard threshold > 0, allTimeCostUSD >= threshold,
               d.double(forKey: Self.spendAlertFiredKey) < threshold else { return }
-        d.set(threshold, forKey: Self.spendAlertFiredKey)   // don't fire again for this threshold
-        let content = UNMutableNotificationContent()
-        content.title = "Council — spend alert"
-        content.body = String(format: "You've spent about $%.2f, past your $%.2f alert.",
-                              allTimeCostUSD, threshold)
-        content.sound = .default
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: "council.spendAlert", content: content, trigger: nil))
+        let spent = allTimeCostUSD
+        let firedKey = Self.spendAlertFiredKey   // capture plain Sendable values only (no `self`/`center`)
+        // Only burn the one-shot once we KNOW we can actually notify — if authorization was denied,
+        // don't set firedAt, so it retries (and fires) once the user grants permission.
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Council — spend alert"
+            content.body = String(format: "You've spent about $%.2f, past your $%.2f alert.", spent, threshold)
+            content.sound = .default
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: "council.spendAlert", content: content, trigger: nil))
+            UserDefaults.standard.set(threshold, forKey: firedKey)
+        }
     }
 
     private func answeredSeats(in idx: Int) -> [Seat] {
