@@ -268,6 +268,30 @@ Developer ID — see `DISTRIBUTION.md`).
 - Deferred polish: parse markdown once on completion; lazy/indexed session loading;
   reuse a single SSE `JSONDecoder`.
 
+## 7. Scroll-performance pass (Session 3)
+
+The color rail stuttered while scrolling. A long hunt by elimination found the real cause
+and a couple of genuine wins along the way:
+
+- **[ROOT] Continuous orb animation** — the hero's ambient orbs ran a `TimelineView(.animation)`
+  forever, so the app **never went idle** → every scroll frame competed with a constant
+  redraw across the glassy Home. Fix: the orbs now animate **only while the hero is hovered**
+  (`AdvisorOrbs(animate:)`), static otherwise. This was the actual jank.
+- **[REAL] Keychain reads in the render path** — `YOUR COUNCIL` (3) + `PROVIDERS` (9) called
+  `hasKey`/`keyExists`, each doing a **synchronous Keychain read**, ~12 per render. Cached
+  into a `Set<LLMProvider>` (`keyCache`), rebuilt only when a key changes — never from a body.
+- **Misfires found & reverted:** `.mask` on the scroll, `.color`-blend background, and the
+  `drawingGroup()`s I added to "help" were either neutral or actively harmful (drawingGroup on
+  an animating view re-rasterizes every frame). All removed.
+- **Opaque window** — dropped the behind-window "desktop-through" curtain (`isOpaque = true`,
+  within-window vibrancy). The frosted backdrop + Liquid Glass cards stay; the desktop no
+  longer shows through (user preference) and the window server stops recompositing against it.
+- **Performance toggle** — Settings → App → "Reduce glass for performance" (`council.liteMode`,
+  default off) swaps real Liquid Glass for the cheap material path for users on weaker Macs.
+
+Net: the full Liquid-Glass look is back AND scrolling is smooth. Lesson: a single
+always-on animation can tax an entire glassy UI far more than the glass itself.
+
 ---
 
 *Generated as a running project record. Update as features land.*

@@ -27,8 +27,19 @@ final class CouncilStore {
     /// permanent "analysis" saved to disk. Shown briefly in the canvas, cleared on retry/nav.
     var divergenceError: String?
     var synthesisError: String?
-    /// Bumped whenever a key is saved, so views re-evaluate `hasKey`.
-    var keyRevision = 0
+    /// Bumped whenever a key is saved; refreshes the key cache so views re-evaluate `hasKey`.
+    var keyRevision = 0 { didSet { refreshKeyCache() } }
+    /// Cached set of providers that currently have a key — so `hasKey`/`keyExists` never hit the
+    /// Keychain from a view body (12 synchronous Keychain reads per render = the scroll jank).
+    /// Rebuilt only when a key actually changes, not on every render.
+    private(set) var keyCache: Set<LLMProvider> = []
+    func refreshKeyCache() {
+        var s: Set<LLMProvider> = []
+        for p in LLMProvider.allCases where p.requiresAPIKey {
+            if let k = (try? KeychainStore.read(account: p.keychainAccount)) ?? nil, !k.isEmpty { s.insert(p) }
+        }
+        keyCache = s
+    }
 
     /// Full per-seat conversation (user/assistant turns, no system). Replayed on Round 1 calls
     /// so each model has its own prior context across rounds.
@@ -133,6 +144,7 @@ final class CouncilStore {
         }
         if let n = UserDefaults.standard.object(forKey: Self.synthKey) as? Int { synthesizerSeatID = n }
         if let n = UserDefaults.standard.object(forKey: Self.devilKey) as? Int { devilsAdvocateSeatID = n }
+        refreshKeyCache()
         loadSessions()
     }
 
@@ -202,9 +214,7 @@ final class CouncilStore {
 
     func hasKey(_ seat: Seat) -> Bool {
         guard let provider = seat.provider else { return false }   // no model picked yet
-        guard provider.requiresAPIKey else { return true }          // e.g. local Ollama
-        let key = try? KeychainStore.read(account: provider.keychainAccount)
-        return (key?.isEmpty == false)
+        return keyExists(provider)
     }
 
     func setKey(_ key: String, for provider: LLMProvider) {
@@ -328,11 +338,10 @@ final class CouncilStore {
     var recentSessionCosts: [Double] {
         sessions.sorted { $0.updatedAt < $1.updatedAt }.suffix(12).map { $0.totalCostUSD }
     }
-    /// Whether a key exists for this provider (provider-level; key-free providers are always "ready").
+    /// Whether a key exists for this provider — reads the cache, never the Keychain (so it's safe
+    /// to call from a view body). Key-free providers (Ollama) are always "ready".
     func keyExists(_ p: LLMProvider) -> Bool {
-        if !p.requiresAPIKey { return true }
-        if let k = (try? KeychainStore.read(account: p.keychainAccount)) ?? nil { return !k.isEmpty }
-        return false
+        !p.requiresAPIKey || keyCache.contains(p)
     }
 
     // MARK: Spend alert (opt-in local notification when total spend crosses a threshold)

@@ -35,18 +35,25 @@ extension NSView {
 /// blending is what makes the whole app read as one sheet of glass. It also makes its host window
 /// transparent so the blur actually reaches the desktop instead of an opaque backing.
 struct VisualEffectBackground: NSViewRepresentable {
+    /// true = behind-window (the desktop shows through, gorgeous but the transparent window forces
+    /// the window server to recomposite against the desktop on every scroll frame → jank).
+    /// false = within-window on an opaque window (still frosted glass, just doesn't reveal the
+    /// actual desktop) → the window server never touches the desktop → buttery scrolling.
+    var desktopGlass: Bool
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
         v.material = .underWindowBackground
-        v.blendingMode = .behindWindow
+        v.blendingMode = desktopGlass ? .behindWindow : .withinWindow
         v.state = .active
         return v
     }
     func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        v.blendingMode = desktopGlass ? .behindWindow : .withinWindow
         DispatchQueue.main.async {
             guard let w = v.window else { return }
-            w.isOpaque = false
-            w.backgroundColor = .clear         // let the vibrancy show the desktop through
+            w.isOpaque = !desktopGlass
+            w.backgroundColor = desktopGlass ? .clear : .windowBackgroundColor
         }
     }
 }
@@ -91,6 +98,14 @@ enum Blue {
         Tint(name: "Pink",     colors: [Color(red: 0.95, green: 0.42, blue: 0.74)]),
         Tint(name: "Violet",   colors: [Color(red: 0.54, green: 0.30, blue: 0.94)]),
         Tint(name: "Indigo",   colors: [Color(red: 0.34, green: 0.32, blue: 0.88)]),
+        Tint(name: "Sky",      colors: [Color(red: 0.35, green: 0.65, blue: 0.98)]),
+        Tint(name: "Emerald",  colors: [Color(red: 0.10, green: 0.72, blue: 0.50)]),
+        Tint(name: "Gold",     colors: [Color(red: 0.92, green: 0.74, blue: 0.18)]),
+        Tint(name: "Coral",    colors: [Color(red: 0.98, green: 0.45, blue: 0.40)]),
+        Tint(name: "Crimson",  colors: [Color(red: 0.82, green: 0.10, blue: 0.24)]),
+        Tint(name: "Magenta",  colors: [Color(red: 0.85, green: 0.18, blue: 0.62)]),
+        Tint(name: "Lavender", colors: [Color(red: 0.66, green: 0.56, blue: 0.92)]),
+        Tint(name: "Slate",    colors: [Color(red: 0.34, green: 0.40, blue: 0.50)]),
         Tint(name: "Graphite", colors: [Color(red: 0.40, green: 0.42, blue: 0.46)]),
         // Two-color mixes (gradients) — drawn split in the swatch, blended on the backdrop:
         Tint(name: "Sunset",   colors: [Color(red: 0.98, green: 0.55, blue: 0.15), Color(red: 0.90, green: 0.20, blue: 0.45)]),
@@ -103,6 +118,13 @@ enum Blue {
         Tint(name: "Lagoon",   colors: [Color(red: 0.12, green: 0.70, blue: 0.86), Color(red: 0.18, green: 0.68, blue: 0.42)]),
         Tint(name: "Galaxy",   colors: [Color(red: 0.28, green: 0.24, blue: 0.78), Color(red: 0.80, green: 0.26, blue: 0.70)]),
         Tint(name: "Magma",    colors: [Color(red: 0.86, green: 0.16, blue: 0.20), Color(red: 0.97, green: 0.52, blue: 0.14)]),
+        Tint(name: "Dusk",     colors: [Color(red: 0.30, green: 0.28, blue: 0.72), Color(red: 0.85, green: 0.30, blue: 0.45)]),
+        Tint(name: "Tropical", colors: [Color(red: 0.55, green: 0.78, blue: 0.20), Color(red: 0.10, green: 0.70, blue: 0.80)]),
+        Tint(name: "Candy",    colors: [Color(red: 0.96, green: 0.45, blue: 0.78), Color(red: 0.55, green: 0.32, blue: 0.92)]),
+        Tint(name: "Steel",    colors: [Color(red: 0.36, green: 0.42, blue: 0.52), Color(red: 0.14, green: 0.62, blue: 0.78)]),
+        Tint(name: "Sunrise",  colors: [Color(red: 0.98, green: 0.78, blue: 0.25), Color(red: 0.96, green: 0.42, blue: 0.16)]),
+        Tint(name: "Nebula",   colors: [Color(red: 0.52, green: 0.28, blue: 0.92), Color(red: 0.14, green: 0.66, blue: 0.86)]),
+        Tint(name: "Forest",   colors: [Color(red: 0.18, green: 0.55, blue: 0.30), Color(red: 0.10, green: 0.62, blue: 0.60)]),
     ]
     /// Fill style for a tint index (nil = none). Shared by the swatch and the backdrop wash.
     static func tintStyle(_ i: Int) -> AnyShapeStyle? {
@@ -193,8 +215,11 @@ struct LayoutTuner: View {
 struct GlassPanel: ViewModifier {
     var corner: CGFloat = 18
     var strokeOpacity: Double = 1
+    /// Performance mode forces the cheap material instead of real Liquid Glass (off by default —
+    /// the beautiful path). A user-facing escape hatch for weaker machines.
+    @AppStorage("council.liteMode") private var liteMode = false
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !liteMode {
             // Real Liquid Glass. `.rect(cornerRadius:)` is the shape API glassEffect expects.
             content.glassEffect(.regular, in: .rect(cornerRadius: corner))
         } else {
@@ -217,6 +242,7 @@ struct GlassControl: ViewModifier {
     var corner: CGFloat? = nil          // nil → capsule
     var tinted: Bool = false
     var interactive: Bool = false
+    @AppStorage("council.liteMode") private var liteMode = false
     @available(macOS 26.0, *)
     private var glass: Glass {
         var g: Glass = .regular
@@ -225,7 +251,7 @@ struct GlassControl: ViewModifier {
         return g
     }
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !liteMode {
             if let corner { content.glassEffect(glass, in: .rect(cornerRadius: corner)) }
             else { content.glassEffect(glass, in: .capsule) }
         } else {
@@ -364,6 +390,9 @@ struct ContentView: View {
 
     /// Background tint index into Blue.bgTints (0 = none/pure glass). User-chosen via the palette.
     @AppStorage("council.bgTint") private var bgTintIndex = 0
+    /// Performance mode: material instead of Liquid Glass + opaque (no desktop-through) window.
+    /// Off by default — the full beautiful glass. A toggle for users on weaker machines.
+    @AppStorage("council.liteMode") private var liteMode = false
 
     /// Ask-from-home composer text (separate from the roundtable composer's `query`).
     @State private var homeQuery = ""
@@ -507,12 +536,12 @@ struct ContentView: View {
     /// then sit on top of that live, refracted backdrop — the actual "glass" you wanted.
     private var gridBackground: some View {
         let style = Blue.tintStyle(bgTintIndex)
-        return VisualEffectBackground()
-            // `.color` forces the backdrop's hue to the chosen color (so blue reads blue, not the
-            // purple you got when blue merely *mixed* with a warm desktop), keeping the glass
-            // luminance/texture. A normal layer adds the color's own presence on top.
-            .overlay { if let style { Rectangle().fill(style).blendMode(.color).opacity(0.65) } }
-            .overlay { if let style { Rectangle().fill(style).opacity(0.20) } }
+        // Opaque window (no desktop showing through) — the frosted backdrop + Liquid Glass cards stay.
+        return VisualEffectBackground(desktopGlass: false)
+            // Plain normal-blend film (NO .color blendMode — that forced a full-window offscreen
+            // composite every frame and caused the scroll jank). A higher opacity keeps the hue
+            // mostly true while staying cheap.
+            .overlay { if let style { Rectangle().fill(style).opacity(0.5) } }
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 0.3), value: bgTintIndex)
     }
@@ -795,30 +824,22 @@ struct ContentView: View {
     /// Vertical strip of background-tint swatches on the right edge. ~6 show at once and the NEXT
     /// one peeks at the bottom under a soft dark fade (+ a bobbing chevron over it), so it's obvious
     /// there are more colors to scroll to. Page stays clean.
+    /// The agreed look: a thin vertical rail, ~7 swatches visible, the rest scroll (the next one
+    /// peeks at the bottom edge). Smooth now that key-status no longer hits the Keychain per render.
     private var colorRail: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 4) {
+                VStack(spacing: 0) {
                     ForEach(Blue.bgTints.indices, id: \.self) { i in
-                        ColorSwatch(index: i, selected: bgTintIndex == i) {
+                        ColorSwatch(index: i, dot: 18, cell: 28, selected: bgTintIndex == i) {
                             withAnimation(.easeInOut(duration: 0.25)) { bgTintIndex = i }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
+                .padding(.vertical, 4)
             }
-            .frame(maxHeight: 200)
-            // Fade the bottom of the list itself (a mask, not an overlay) → the next color dissolves
-            // softly to signal "more below", with NO left/right/bottom borders.
-            .mask(
-                LinearGradient(stops: [
-                    .init(color: .black, location: 0.0),
-                    .init(color: .black, location: 0.82),
-                    .init(color: .clear, location: 1.0),
-                ], startPoint: .top, endPoint: .bottom)
-            )
+            .frame(maxHeight: 224)   // ~7 swatches; rest scroll, next peeks at the cut edge
             Spacer(minLength: 0)
         }
     }
@@ -2221,6 +2242,7 @@ private struct SettingsSheet: View {
     @AppStorage("council.spendAlertAmt") private var spendAlertAmt = 10.0
     /// Mirror the chosen background tint so the sheet harmonizes with the app behind it.
     @AppStorage("council.bgTint") private var bgTintIndex = 0
+    @AppStorage("council.liteMode") private var liteMode = false
     /// A council config staged for import, awaiting confirmation (it overwrites the live setup).
     @State private var pendingImport: CouncilConfig?
     /// A preset staged for "load" confirmation.
@@ -2432,6 +2454,17 @@ private struct SettingsSheet: View {
                 AppearanceOption(label: "LIGHT", value: "light", icon: "sun.max", appearance: $appearance)
                 AppearanceOption(label: "DARK", value: "dark", icon: "moon", appearance: $appearance)
             }
+        }
+        section("PERFORMANCE") {
+            Toggle(isOn: $liteMode) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Reduce glass for performance")
+                        .font(Blue.body(12)).foregroundStyle(Blue.ink)
+                    Text("Uses a lighter material and an opaque window (no desktop-through). Turn on if scrolling feels heavy on your Mac.")
+                        .font(Blue.mono(10)).foregroundStyle(Blue.dim)
+                }
+            }
+            .toggleStyle(.switch).tint(Blue.accent)
         }
         section("SHARING") {
             Toggle(isOn: $shareWatermark) {
@@ -2742,6 +2775,8 @@ private struct Slash: Shape {
 /// (half/half) so it's obvious it's a mix.
 private struct ColorSwatch: View {
     let index: Int
+    var dot: CGFloat = 18
+    var cell: CGFloat = 30
     let selected: Bool
     let action: () -> Void
     @State private var hovered = false
@@ -2764,13 +2799,13 @@ private struct ColorSwatch: View {
     var body: some View {
         Button(action: action) {
             fill
-                .frame(width: 18, height: 18)
+                .frame(width: dot, height: dot)
                 .overlay(Circle().strokeBorder(selected ? Blue.ink : Blue.glassStroke,
-                                               lineWidth: selected ? 2.5 : 1))
-                .scaleEffect(hovered ? 1.4 : (selected ? 1.12 : 1.0))
-                .shadow(color: .black.opacity(hovered ? 0.25 : 0), radius: 3)
-                .frame(width: 30, height: 30)          // generous circular hit area — easy to click
-                .contentShape(Circle())
+                                               lineWidth: selected ? 2 : 1))
+                .scaleEffect(hovered ? 1.35 : (selected ? 1.1 : 1.0))
+                .frame(maxWidth: .infinity)
+                .frame(height: cell)                 // full-cell hit area — easy to click
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(Blue.bgTints[index].name)
@@ -2781,23 +2816,35 @@ private struct ColorSwatch: View {
 /// Ambient "three advisors" motif — three orbs slowly orbiting while breathing in and out
 /// (converge → diverge), embodying the council. Pure decoration; drives the home hero's life.
 private struct AdvisorOrbs: View {
+    /// Animate ONLY while the hero is hovered. A continuous TimelineView never lets the app idle,
+    /// which made everything (especially scrolling) janky — so the orbs rest static and come alive
+    /// when you actually look at them.
+    var animate: Bool
     var body: some View {
-        TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            let r = 13.0 + sin(t * 0.7) * 9.0          // breathe: converge ↔ diverge
-            ZStack {
-                ForEach(0..<3, id: \.self) { i in
-                    let a = Double(i) / 3.0 * 2.0 * .pi + t * 0.45   // slow rotation
-                    Circle()
-                        .fill(Blue.ink.opacity(0.9 - Double(i) * 0.14))
-                        .frame(width: 13, height: 13)
-                        .offset(x: CGFloat(cos(a) * r), y: CGFloat(sin(a) * r))
-                        .shadow(color: Blue.ink.opacity(0.25), radius: 4)
+        Group {
+            if animate {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+                    orbs(at: ctx.date.timeIntervalSinceReferenceDate)
                 }
+            } else {
+                orbs(at: 0)   // static resting pose
             }
-            .frame(width: 76, height: 76)
         }
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private func orbs(at t: Double) -> some View {
+        let r = 13.0 + sin(t * 0.7) * 9.0          // breathe: converge ↔ diverge
+        ZStack {
+            ForEach(0..<3, id: \.self) { i in
+                let a = Double(i) / 3.0 * 2.0 * .pi + t * 0.45   // slow rotation
+                Circle()
+                    .fill(Blue.ink.opacity(0.9 - Double(i) * 0.14))
+                    .frame(width: 13, height: 13)
+                    .offset(x: CGFloat(cos(a) * r), y: CGFloat(sin(a) * r))
+            }
+        }
+        .frame(width: 76, height: 76)
     }
 }
 
@@ -2807,6 +2854,7 @@ private struct HomeHero: View {
     var onPick: (String) -> Void
     @State private var exIndex = 0
     @State private var ethIndex = 0
+    @State private var heroHover = false   // orbs animate only while the hero is hovered
 
     private let examples = [
         "Should I take the job offer or keep looking?",
@@ -2870,7 +2918,7 @@ private struct HomeHero: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            AdvisorOrbs().frame(width: 76, height: 76)
+            AdvisorOrbs(animate: heroHover).frame(width: 76, height: 76)
             VStack(alignment: .leading, spacing: 7) {
                 Text("COUNCIL").font(Blue.mono(17, .bold)).tracking(6).foregroundStyle(Blue.ink)
                 Button { onPick(examples[exIndex]) } label: {
@@ -2896,6 +2944,7 @@ private struct HomeHero: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel(corner: 20)
+        .onHover { h in heroHover = h }   // bring the orbs to life only while hovering the hero
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(6))
