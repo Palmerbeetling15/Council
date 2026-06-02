@@ -292,6 +292,21 @@ and a couple of genuine wins along the way:
 Net: the full Liquid-Glass look is back AND scrolling is smooth. Lesson: a single
 always-on animation can tax an entire glassy UI far more than the glass itself.
 
+## 8. Polish pass (Session 4)
+
+- **Dashboard data audited & verified** (adversarial review): all cost/stat aggregates
+  compute correctly; no key is ever read or shown by the dashboard/notification code.
+  Fixed two spend-alert bugs (only burn the one-shot once authorization is confirmed;
+  re-arm on re-enable / threshold change). SPEND "this week" now shows spend, not a
+  session count. Removed dead code + two Sendable warnings.
+- **Onboarding animation made cinematic & consistent** — all three beats now reveal with
+  the same slow blur-focus (COUNCIL wordmark in, tap→card, CONTINUE→app), ~1.1–1.2s.
+  **Root fix:** the dismiss was driven by an `@AppStorage` flag, whose change propagates
+  asynchronously and so was *not captured by `withAnimation`* → the exit kept playing
+  instantly no matter the duration. Now a local `@State` drives the transition (the
+  `@AppStorage` is persistence only), so it animates reliably.
+- A Desktop `Council.app` symlink points at the Release build for one-click launching.
+
 ---
 
 *Generated as a running project record. Update as features land.*

@@ -385,8 +385,11 @@ struct ContentView: View {
     @State private var renamingSession: UUID?
     @State private var renameText = ""
 
-    /// First-run onboarding — shown once, then never again.
+    /// First-run onboarding — shown once, then never again. `didOnboard` persists; `showOnboarding`
+    /// is the LOCAL @State that actually drives the overlay (so withAnimation reliably animates the
+    /// dismiss — an @AppStorage change propagates async and skips the transition).
     @AppStorage("council.didOnboard") private var didOnboard = false
+    @State private var showOnboarding = false
 
     /// Background tint index into Blue.bgTints (0 = none/pure glass). User-chosen via the palette.
     @AppStorage("council.bgTint") private var bgTintIndex = 0
@@ -418,11 +421,15 @@ struct ContentView: View {
                 .opacity(0).frame(width: 0, height: 0)
             #endif
         }
+        .onAppear { if !didOnboard { showOnboarding = true } }   // instant insert; the card animates itself in
         .overlay {
-            if !didOnboard {
-                OnboardingCard { withAnimation(.easeInOut(duration: 0.6)) { didOnboard = true } }
+            if showOnboarding {
+                OnboardingCard {
+                    didOnboard = true                                                  // persist (no animation needed)
+                    withAnimation(.easeOut(duration: 1.1)) { showOnboarding = false }   // animate the blur-out
+                }
                     .preferredColorScheme(scheme)
-                    .transition(.opacity.combined(with: .scale(scale: 1.03)))
+                    .transition(.revealBlur)   // slow blur-out, matching the reveal feel
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -2959,9 +2966,9 @@ private struct RevealBlur: ViewModifier {
     let p: Double   // 0 = hidden, 1 = shown
     func body(content: Content) -> some View {
         content
-            .blur(radius: (1 - p) * 16)
-            .scaleEffect(0.90 + p * 0.10)
-            .offset(y: (1 - p) * 18)
+            .blur(radius: (1 - p) * 22)          // match the COUNCIL wordmark's blur-focus feel
+            .scaleEffect(0.84 + p * 0.16)
+            .offset(y: (1 - p) * 14)
             .opacity(p)
     }
 }
@@ -3018,7 +3025,7 @@ private struct OnboardingCard: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     if revealed { dismiss() }
-                    else { withAnimation(.spring(response: 0.9, dampingFraction: 0.84)) { revealed = true } }
+                    else { withAnimation(.easeOut(duration: 1.2)) { revealed = true } }   // same slow, cinematic feel as the COUNCIL reveal
                 }
 
             if !revealed {
@@ -3029,8 +3036,9 @@ private struct OnboardingCard: View {
                     Text("tap anywhere to begin")
                         .font(Blue.mono(10)).tracking(3).foregroundStyle(Blue.dim)
                 }
-                .scaleEffect(appeared ? 1 : 0.94)
-                .blur(radius: appeared ? 0 : 14)
+                .scaleEffect(appeared ? 1 : 0.82)
+                .blur(radius: appeared ? 0 : 20)
+                .offset(y: appeared ? 0 : 12)
                 .opacity(appeared ? 1 : 0)
                 .transition(.opacity.combined(with: .scale(scale: 1.08)))
             } else {
@@ -3064,7 +3072,8 @@ private struct OnboardingCard: View {
             }
         }
         .onAppear {
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.78)) { appeared = true }
+            // Slow, cinematic first reveal of the COUNCIL wordmark.
+            withAnimation(.easeOut(duration: 1.2).delay(0.1)) { appeared = true }
         }
         // Esc dismisses (from either beat).
         .background {
