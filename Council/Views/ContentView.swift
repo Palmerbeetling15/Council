@@ -485,8 +485,8 @@ struct ContentView: View {
         // Opaque window (no desktop showing through) — the frosted backdrop + Liquid Glass cards stay.
         return VisualEffectBackground(desktopGlass: false)
             // Plain normal-blend film (NO .color blendMode — that forced a full-window offscreen
-            // composite every frame and caused the scroll jank). Subtle: a wash, not a flood.
-            .overlay { if let style { Rectangle().fill(style).opacity(0.28) } }
+            // composite every frame and caused the scroll jank). Saturated tint.
+            .overlay { if let style { Rectangle().fill(style).opacity(0.5) } }
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 0.3), value: bgTintIndex)
     }
@@ -2354,7 +2354,7 @@ private struct SettingsSheet: View {
                 // Harmonize with the app's chosen background tint (plain blend — matches the main
                 // backdrop and avoids the costly .color blend mode).
                 if let s = Blue.tintStyle(bgTintIndex) {
-                    Rectangle().fill(s).opacity(0.22)
+                    Rectangle().fill(s).opacity(0.4)
                 }
             }
         }
