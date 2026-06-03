@@ -307,6 +307,20 @@ always-on animation can tax an entire glassy UI far more than the glass itself.
   `@AppStorage` is persistence only), so it animates reliably.
 - A Desktop `Council.app` symlink points at the Release build for one-click launching.
 
+## 9. Peer Review page + sidebar polish (Session 5)
+
+- **Peer Review is now its own full page** (like Divergence/Synthesis) — each advisor's
+  critique as an attributed, de-anonymized card; Devil's Advocate badged. The inline
+  per-panel peer review was removed, so all four deliberation stages
+  (ROUNDTABLE / PEER REVIEW / DIVERGENCE / SYNTHESIS) are consistent screens.
+- **Ambient orbs animate only while hovering the orbs** themselves (not the whole hero).
+- **History rows** got the hover highlight, matched exactly to the sidebar mode rows.
+- **Background tint dialed back** 0.5 → 0.28 (it was flooding the UI with the chosen hue).
+- **Sidebar clears the window chrome**: dedicated insets so the card clears the macOS
+  traffic lights at top and lifts off the bottom — without moving the dashboard.
+- **Layout finalized & locked**: the dialed-in spacing is baked in and the ⌘D Layout
+  Tuner (overlay, shortcut, knob list, the whole struct) was removed so it can't drift.
+
 ---
 
 *Generated as a running project record. Update as features land.*

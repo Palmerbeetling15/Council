@@ -154,59 +154,13 @@ final class Layout {
     var sidebarGap: CGFloat       = 9    // space between sidebar and the canvas
     var sidebarWidth: CGFloat     = 222  // sidebar card width
     var sidebarTopInset: CGFloat  = 5    // space above NEW DIRECTIVE inside the sidebar
+    var sidebarTrafficClear: CGFloat = 15 // push the sidebar card down to clear the macOS traffic lights
+    var sidebarBottomClear: CGFloat = 16 // lift JUST the sidebar card off the bottom (dashboard unaffected)
     var panelGap: CGFloat         = 32   // space between the 3 advisor panels
     var canvasRowGap: CGFloat     = 9    // space between round-bar / panels / input
     var panelCorner: CGFloat      = 30   // advisor panel corner radius
     var roundBarTop: CGFloat      = -6   // shift the ROUND row up (−) / down (+); panels unaffected
     var exportY: CGFloat          = -4   // shift JUST the EXPORT button up (−) / down (+)
-
-    /// (label, keyPath, range) for the tuner UI.
-    var knobs: [(String, ReferenceWritableKeyPath<Layout, CGFloat>, ClosedRange<CGFloat>)] {
-        [("Window Top", \.windowTopInset, 0...80),
-         ("Window Sides", \.windowSideInset, 0...60),
-         ("Window Bottom", \.windowBottomInset, 0...60),
-         ("Sidebar Gap", \.sidebarGap, 0...60),
-         ("Sidebar Width", \.sidebarWidth, 150...360),
-         ("Sidebar Top", \.sidebarTopInset, 0...80),
-         ("Panel Gap", \.panelGap, 0...60),
-         ("Row Gap", \.canvasRowGap, -30...50),
-         ("Panel Corner", \.panelCorner, 0...40),
-         ("Round Bar Y", \.roundBarTop, -40...40),
-         ("Export Y", \.exportY, -40...40)]
-    }
-}
-
-/// The live layout tuner overlay (⌘D). Drag sliders, watch the layout update instantly.
-struct LayoutTuner: View {
-    @Bindable var layout = Layout.shared
-    var onClose: () -> Void
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("LAYOUT TUNER").font(Blue.mono(11, .bold)).tracking(2).foregroundStyle(Blue.ink)
-                Spacer()
-                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)) }
-                    .buttonStyle(.plain).foregroundStyle(Blue.sub)
-            }
-            ForEach(Array(layout.knobs.enumerated()), id: \.offset) { _, knob in
-                let (label, kp, range) = knob
-                HStack(spacing: 10) {
-                    Text(label).font(Blue.mono(9)).foregroundStyle(Blue.sub)
-                        .frame(width: 92, alignment: .leading)
-                    Slider(value: Binding(get: { layout[keyPath: kp] },
-                                          set: { layout[keyPath: kp] = $0.rounded() }), in: range)
-                    Text("\(Int(layout[keyPath: kp]))").font(Blue.mono(10, .bold)).foregroundStyle(Blue.ink)
-                        .frame(width: 34, alignment: .trailing)
-                }
-            }
-        }
-        .padding(16)
-        .frame(width: 320)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
-        .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
-        .padding(20)
-    }
 }
 
 /// Frosted-glass surface. On macOS 26+ this uses Apple's real Liquid Glass (`.glassEffect`),
@@ -369,11 +323,10 @@ struct ContentView: View {
     @State private var handleHover = false
 
     /// Live layout tuner (⌘D) — drag sliders to dial in spacing, then tell me the numbers.
-    @Bindable private var layout = Layout.shared
-    @State private var showTuner = false
+    private let layout = Layout.shared   // fixed layout constants (tuner removed)
 
     /// Which canvas the user is looking at: the 3-panel round, or a full-width deliberation artifact.
-    enum CanvasMode { case panels, divergence, synthesis }
+    enum CanvasMode { case panels, peerReview, divergence, synthesis }
     @State private var canvasMode: CanvasMode = .panels
 
     /// Top-level screen: the Home dashboard (landing) or the live roundtable.
@@ -407,20 +360,7 @@ struct ContentView: View {
         // (which is what shifted the view when NEW DIRECTIVE emptied the panels).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(scheme)
-        .overlay(alignment: .topTrailing) {
-            // Dev-only live layout tuner — must be completely absent from release builds.
-            #if DEBUG
-            if showTuner { LayoutTuner { showTuner = false }.preferredColorScheme(scheme) }
-            #endif
-        }
         .background { shortcutButtons }
-        .background {
-            // ⌘D opens the tuner — DEBUG only, so there is no affordance at all in release.
-            #if DEBUG
-            Button("") { showTuner.toggle() }.keyboardShortcut("d", modifiers: .command)
-                .opacity(0).frame(width: 0, height: 0)
-            #endif
-        }
         .onAppear { if !didOnboard { showOnboarding = true } }   // instant insert; the card animates itself in
         .overlay {
             if showOnboarding {
@@ -486,6 +426,8 @@ struct ContentView: View {
             if sidebarOpen {
                 sidebar
                     .overlay(alignment: .trailing) { sidebarHandle }   // stuck to the sidebar's edge
+                    .padding(.top, layout.sidebarTrafficClear)         // drop the card below the traffic lights
+                    .padding(.bottom, layout.sidebarBottomClear)       // lift JUST this column off the bottom
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
             Group {
@@ -543,9 +485,8 @@ struct ContentView: View {
         // Opaque window (no desktop showing through) — the frosted backdrop + Liquid Glass cards stay.
         return VisualEffectBackground(desktopGlass: false)
             // Plain normal-blend film (NO .color blendMode — that forced a full-window offscreen
-            // composite every frame and caused the scroll jank). A higher opacity keeps the hue
-            // mostly true while staying cheap.
-            .overlay { if let style { Rectangle().fill(style).opacity(0.5) } }
+            // composite every frame and caused the scroll jank). Subtle: a wash, not a flood.
+            .overlay { if let style { Rectangle().fill(style).opacity(0.28) } }
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 0.3), value: bgTintIndex)
     }
@@ -583,13 +524,14 @@ struct ContentView: View {
                      action: { screen = .council; canvasMode = .panels })
 
             modeItem("arrow.2.squarepath", "PEER REVIEW",
-                     state: (store.canPeerReview || store.hasPeerReviewForViewedRound) ? .button : .locked,
+                     state: (screen == .council && canvasMode == .peerReview) ? .active
+                          : ((store.canPeerReview || store.hasPeerReviewForViewedRound) ? .button : .locked),
                      hint: store.hasPeerReviewForViewedRound
                         ? "Show this round's peer review (already generated)"
                         : (store.canPeerReview ? "Models review each other's answers, anonymized"
                                                : "Ask a question first — unlocks once ≥2 models have answered"),
                      action: (store.canPeerReview || store.hasPeerReviewForViewedRound) ? {
-                        screen = .council; canvasMode = .panels
+                        screen = .council; canvasMode = .peerReview
                         if !store.hasPeerReviewForViewedRound { runRound { await store.peerReview() } }
                      } : nil)
 
@@ -670,8 +612,11 @@ struct ContentView: View {
                     .font(Blue.mono(11)).lineLimit(1).truncationMode(.tail)
                     .foregroundStyle(s.id == store.currentSession ? Blue.ink : Blue.sub)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18).padding(.vertical, 9)
-                    .background(s.id == store.currentSession ? Blue.ink.opacity(0.06) : Color.clear)
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(s.id == store.currentSession ? Blue.ink.opacity(0.06) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .glassHover(corner: 10)                 // exact same geometry as the sidebar mode rows
+                    .padding(.horizontal, 12).padding(.vertical, 4)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1010,6 +955,8 @@ struct ContentView: View {
                 switch canvasMode {
                 case .panels:
                     panelGrid
+                case .peerReview:
+                    peerReviewView
                 case .divergence:
                     deliberationView(title: "DIVERGENCE",
                                      text: store.divergenceText,
@@ -1051,7 +998,6 @@ struct ContentView: View {
                     AdvisorPanel(seat: seat,
                                  answeredProvider: store.viewedAnswerProvider(seat.id),
                                  answer: store.viewedAnswer(seat.id),
-                                 peerReview: store.viewedPeerReview(seat.id),
                                  loading: store.generatingRound == store.viewingRound && store.status[seat.id] == .loading,
                                  failedMessage: panelFailure(seat.id),
                                  connected: connected(seat),
@@ -1247,6 +1193,109 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .glassPanel(corner: 22)
+    }
+
+    private var peerReviewGenerating: Bool {
+        store.deliberationBusy && store.generatingRound == store.viewingRound
+    }
+
+    /// Full-page peer review — each advisor's critique of the others, as an attributed card.
+    private var peerReviewView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text("PEER REVIEW").font(Blue.mono(15, .bold)).tracking(2).foregroundStyle(Blue.ink)
+                Text("· advisors critique each other").font(Blue.mono(9)).foregroundStyle(Blue.sub)
+                Spacer()
+                if store.hasPeerReviewForViewedRound && !peerReviewGenerating {
+                    Button { runRound { await store.peerReview() } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .bold))
+                            Text("REGENERATE").font(Blue.mono(9, .bold)).tracking(1)
+                        }
+                        .foregroundStyle(Blue.sub).padding(.horizontal, 8).padding(.vertical, 5)
+                        .glassHover(corner: 8).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).disabled(!store.canPeerReview).help("Re-run peer review for this round")
+                }
+                Button { canvasMode = .panels } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.left").font(.system(size: 10, weight: .bold))
+                        Text("PANELS").font(Blue.mono(10, .bold)).tracking(1)
+                    }
+                    .foregroundStyle(Blue.ink)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+            .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
+
+            if peerReviewGenerating && !store.hasPeerReviewForViewedRound {
+                VStack(spacing: 12) {
+                    Text("REVIEWING…").font(Blue.mono(11, .bold)).tracking(1).foregroundStyle(Blue.sub)
+                    FillBar(once: true).frame(maxWidth: 280)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if store.hasPeerReviewForViewedRound {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        ForEach(store.seats) { seat in
+                            if let review = store.viewedPeerReview(seat.id), !review.isEmpty {
+                                peerReviewCard(seat: seat, review: review)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 820).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+                }
+            } else {
+                VStack(spacing: 14) {
+                    Text("Not generated for this round yet.")
+                        .font(Blue.body(14)).foregroundStyle(Blue.sub)
+                    Button { runRound { await store.peerReview() } } label: {
+                        Text("GENERATE PEER REVIEW").font(Blue.mono(11, .bold)).tracking(1)
+                            .foregroundStyle(store.canPeerReview ? Blue.ink : Blue.dim)
+                            .padding(.horizontal, 22).padding(.vertical, 12)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(store.canPeerReview ? Blue.glassBright : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain).disabled(!store.canPeerReview)
+                    if !store.canPeerReview {
+                        Text(deliberationDisabledReason)
+                            .font(Blue.mono(9)).foregroundStyle(Blue.dim).multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .glassPanel(corner: 22)
+    }
+
+    private func peerReviewCard(seat: Seat, review: String) -> some View {
+        let name = (store.viewedAnswerProvider(seat.id) ?? seat.provider?.panelName ?? "—").uppercased()
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(name).font(Blue.mono(11, .bold)).tracking(1).foregroundStyle(Blue.ink)
+                if seat.id == store.devilsAdvocateSeatID {
+                    Text("DEVIL'S ADVOCATE").font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.red)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .overlay(Capsule().strokeBorder(Blue.red.opacity(0.5), lineWidth: 1))
+                }
+                Spacer()
+            }
+            MarkdownView(text: review, baseSize: 14).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
     }
 
     private func connected(_ seat: Seat) -> Bool {
@@ -1549,7 +1598,6 @@ private struct AdvisorPanel: View {
     /// Provider name stored with this round's answer (used for the title when the seat is unassigned).
     var answeredProvider: String? = nil
     let answer: String?
-    let peerReview: String?
     let loading: Bool
     let failedMessage: String?
     let connected: Bool
@@ -1774,16 +1822,6 @@ private struct AdvisorPanel: View {
                     if let answer, !answer.isEmpty {
                         MarkdownView(text: answer).textSelection(.enabled)
                     }
-                    if let peerReview, !peerReview.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 8) {
-                                Rectangle().fill(Blue.ink).frame(width: 16, height: 2)
-                                Text("PEER REVIEW").font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.sub)
-                            }
-                            MarkdownView(text: peerReview).textSelection(.enabled)
-                        }
-                        .padding(.top, 6)
-                    }
                     if loading {
                         HStack(spacing: 0) { StreamingCaret(); Spacer(minLength: 0) }
                     }
@@ -1796,7 +1834,6 @@ private struct AdvisorPanel: View {
                 }
             }
             .onChange(of: answer) { _, _ in scrollToEnd(proxy) }
-            .onChange(of: peerReview) { _, _ in scrollToEnd(proxy) }
         }
     }
 
@@ -2317,7 +2354,7 @@ private struct SettingsSheet: View {
                 // Harmonize with the app's chosen background tint (plain blend — matches the main
                 // backdrop and avoids the costly .color blend mode).
                 if let s = Blue.tintStyle(bgTintIndex) {
-                    Rectangle().fill(s).opacity(0.4)
+                    Rectangle().fill(s).opacity(0.22)
                 }
             }
         }
@@ -2922,7 +2959,10 @@ private struct HomeHero: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            AdvisorOrbs(animate: heroHover).frame(width: 76, height: 76)
+            AdvisorOrbs(animate: heroHover)
+                .frame(width: 76, height: 76)
+                .contentShape(Rectangle())
+                .onHover { isOver in heroHover = isOver }   // animate only while the cursor is on the orbs
             VStack(alignment: .leading, spacing: 7) {
                 Text("COUNCIL").font(Blue.mono(17, .bold)).tracking(6).foregroundStyle(Blue.ink)
                 Button { onPick(examples[exIndex]) } label: {
@@ -2948,7 +2988,6 @@ private struct HomeHero: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel(corner: 20)
-        .onHover { h in heroHover = h }   // bring the orbs to life only while hovering the hero
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(6))
