@@ -321,6 +321,31 @@ always-on animation can tax an entire glassy UI far more than the glass itself.
 - **Layout finalized & locked**: the dialed-in spacing is baked in and the ⌘D Layout
   Tuner (overlay, shortcut, knob list, the whole struct) was removed so it can't drift.
 
+## 10. Pre-launch hardening + app icon (Session 6)
+
+- **App icon** — the app finally has a real icon: a council of three orbs on a carbon-fiber
+  squircle (metallic spheres), designed in Stitch and imported to a full macOS `.appiconset`
+  (16→1024) + `docs/icon.png` via `scripts/import_stitch_icon.py` (flood-fills the white
+  export canvas to transparent, follows the squircle edge, re-frames with native margin +
+  shadow). `CFBundleIconName` wired; INFOPLIST copyright filled.
+- **Ollama connectivity fixed** — the sandboxed Release app couldn't reach a local Ollama
+  because ATS blocks plaintext `http://localhost`. Added `NSAllowsLocalNetworking` via a
+  repo-root `Council-Info.plist` (merged through `INFOPLIST_FILE` while keeping
+  `GENERATE_INFOPLIST_FILE`): loopback / `.local` HTTP allowed, every real domain still
+  HTTPS. Connection failures are now provider-aware ("Can't reach Ollama … is it running?").
+- **First-run UX** (surfaced by a pre-launch review) — the PROVIDERS board and YOUR COUNCIL
+  "Configure" now open the seat panels (where keys are actually entered) instead of Settings;
+  each key step links to that provider's API-key console; the Home hero question auto-runs
+  once at least one seat is keyed; dead `homeQuery` state removed.
+- **Explainers** — an ⓘ popover + an empty-state description on Peer Review / Divergence /
+  Synthesis so a newcomer learns what each does before generating.
+- **Open-source artifacts** — `README.md`, `LICENSE` (MIT), and the authorship comment set
+  to the public "Joseph" persona. A security/privacy pass confirmed API keys live only in
+  the Keychain and nothing sensitive ships.
+- Release build clean (0 warnings).
+- **Pending before the repo goes public:** git history still carries the dev's real commit
+  email — author identity to be rewritten to the final pseudonymous handle before any push.
+
 ---
 
 *Generated as a running project record. Update as features land.*

@@ -678,8 +678,26 @@ final class CouncilStore {
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 return (full.isEmpty ? nil : full, input, output, true, nil)
             }
-            return (nil, input, output, false, error.localizedDescription)
+            return (nil, input, output, false, Self.friendlyError(error, provider: provider))
         }
+    }
+
+    /// Turn a raw networking error into a clear, provider-aware message. The common confusing case
+    /// is a local Ollama that simply isn't running — say so plainly instead of "Could not connect…".
+    private static func friendlyError(_ error: Error, provider: LLMProvider) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost,
+                 .notConnectedToInternet, .timedOut, .cannotLoadFromNetwork, .dnsLookupFailed:
+                if provider == .ollama {
+                    return "Can't reach Ollama at localhost:11434 — is it running? Start it in Terminal with:  ollama serve"
+                }
+                return "Couldn't reach \(provider.panelName). Check your connection and try again."
+            default:
+                break
+            }
+        }
+        return error.localizedDescription
     }
 
     // MARK: - Export

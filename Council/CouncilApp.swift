@@ -2,7 +2,7 @@
 //  CouncilApp.swift
 //  Council
 //
-//  Created by Sina on 28.05.2026.
+//  Created by Joseph on 28.05.2026.
 //
 
 import SwiftUI

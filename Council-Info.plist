@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Council reaches a LOCAL Ollama server over plaintext HTTP on localhost.
+	     NSAllowsLocalNetworking permits loopback / .local / localhost HTTP only —
+	     every real (internet) domain still requires HTTPS under ATS. All other
+	     providers (Claude, GPT, Gemini, …) are HTTPS and unaffected.
+	     Kept at the repo root (outside the synced Council/ source folder) so Xcode
+	     doesn't auto-add it to Copy Bundle Resources. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

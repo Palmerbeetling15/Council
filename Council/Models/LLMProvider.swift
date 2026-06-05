@@ -92,6 +92,22 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
     /// Stable identifier used as the Keychain account name for this provider's key.
     var keychainAccount: String { "apikey.\(rawValue)" }
 
+    /// The provider's official API-key console — shown as a "where do I get a key?" link in the
+    /// key-entry step. nil for local/on-device backends that need no key.
+    var consoleURL: URL? {
+        switch self {
+        case .claude:     return URL(string: "https://console.anthropic.com/settings/keys")
+        case .openAI:     return URL(string: "https://platform.openai.com/api-keys")
+        case .gemini:     return URL(string: "https://aistudio.google.com/apikey")
+        case .deepSeek:   return URL(string: "https://platform.deepseek.com/api_keys")
+        case .grok:       return URL(string: "https://console.x.ai")
+        case .mistral:    return URL(string: "https://console.mistral.ai/api-keys")
+        case .perplexity: return URL(string: "https://www.perplexity.ai/settings/api")
+        case .openRouter: return URL(string: "https://openrouter.ai/keys")
+        case .ollama, .foundationModels: return nil
+        }
+    }
+
     /// OpenAI-compatible `/chat/completions` endpoint. nil for backends that don't use the
     /// generic client (Claude has its own; Foundation Models isn't networked).
     var openAIEndpoint: URL? {

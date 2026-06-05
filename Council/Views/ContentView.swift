@@ -347,9 +347,6 @@ struct ContentView: View {
     /// Background tint index into Blue.bgTints (0 = none/pure glass). User-chosen via the palette.
     @AppStorage("council.bgTint") private var bgTintIndex = 0
 
-    /// Ask-from-home composer text (separate from the roundtable composer's `query`).
-    @State private var homeQuery = ""
-
     private var scheme: ColorScheme { appearance == "dark" ? .dark : .light }
 
     init(store: CouncilStore) { self.store = store }
@@ -663,7 +660,12 @@ struct ContentView: View {
             // Everything fits in one glance — no scrolling. Hero on top, then three equal-height
             // rows of paired cards that share the remaining height.
             VStack(spacing: 10) {
-                HomeHero { q in query = q; canvasMode = .panels; screen = .council }
+                HomeHero { q in
+                    query = q; screen = .council
+                    // If at least one advisor is connected, run it straight away (the "→" implies it
+                    // will start); otherwise land on the panels so the user can connect a key first.
+                    if store.seats.contains(where: store.hasKey) { ask() } else { canvasMode = .panels }
+                }
 
                 // Grid pairs cards at equal height per row (so no empty gap under the shorter card)
                 // while each row stays its natural height — tight gaps, no greedy stretch.
@@ -752,7 +754,7 @@ struct ContentView: View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)],
                   alignment: .leading, spacing: 4) {
             ForEach(LLMProvider.selectable) { p in
-                Button { showSettings = true } label: {
+                Button { screen = .council; canvasMode = .panels } label: {
                     HStack(spacing: 7) {
                         Circle().fill(store.keyExists(p) ? Blue.ink : Color.clear)
                             .overlay(Circle().strokeBorder(Blue.glassStroke))
@@ -861,7 +863,7 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                 }
             }
-            Button(action: { showSettings = true }) {
+            Button(action: { screen = .council; canvasMode = .panels }) {
                 HStack(spacing: 6) {
                     Image(systemName: "slider.horizontal.3").font(.system(size: 9, weight: .bold))
                     Text("CONFIGURE").font(Blue.mono(9, .bold)).tracking(1)
@@ -959,6 +961,7 @@ struct ContentView: View {
                     peerReviewView
                 case .divergence:
                     deliberationView(title: "DIVERGENCE",
+                                     info: "Where the council disagrees. It skips what everyone already shares and pulls out the real fault lines — what they split on, and why.",
                                      text: store.divergenceText,
                                      loading: store.deliberationBusy && store.divergenceText == nil,
                                      canGenerate: store.canSynthesize,
@@ -968,6 +971,7 @@ struct ContentView: View {
                                      onGenerate: { runRound { await store.runDivergence() } })
                 case .synthesis:
                     deliberationView(title: "SYNTHESIS",
+                                     info: "The council's answers distilled into one — the common ground plus the strongest individual points, for a single, decision-ready read.",
                                      text: store.synthesisText,
                                      loading: store.deliberationBusy && store.synthesisText == nil,
                                      canGenerate: store.canSynthesize,
@@ -1094,13 +1098,14 @@ struct ContentView: View {
     /// Full-width, calm reading view for the VIEWED round's cross-model artifact.
     /// Shows the stored artifact if present (never auto-regenerates); offers an explicit
     /// GENERATE for rounds that don't have one yet, and a REGENERATE in the header.
-    private func deliberationView(title: String, text: String?, loading: Bool,
+    private func deliberationView(title: String, info: String, text: String?, loading: Bool,
                                   canGenerate: Bool, error: String?, disabledReason: String,
                                   onExportImage: @escaping (Bool) -> Void,
                                   onGenerate: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Text(title).font(Blue.mono(15, .bold)).tracking(2).foregroundStyle(Blue.ink)
+                InfoDot(text: info)
                 if let n = store.synthesizerName, text != nil {
                     Text("· via \(n.uppercased())").font(Blue.mono(9)).foregroundStyle(Blue.sub)
                 }
@@ -1168,8 +1173,11 @@ struct ContentView: View {
                 }
             } else {
                 VStack(spacing: 14) {
+                    Text(info)
+                        .font(Blue.body(13)).foregroundStyle(Blue.sub)
+                        .multilineTextAlignment(.center).lineSpacing(2).frame(maxWidth: 400)
                     Text("Not generated for this round yet.")
-                        .font(Blue.body(14)).foregroundStyle(Blue.sub)
+                        .font(Blue.mono(9)).tracking(1).foregroundStyle(Blue.dim)
                     Button(action: onGenerate) {
                         Text("GENERATE \(title)").font(Blue.mono(11, .bold)).tracking(1)
                             .foregroundStyle(canGenerate ? Blue.ink : Blue.dim)
@@ -1195,6 +1203,8 @@ struct ContentView: View {
         .glassPanel(corner: 22)
     }
 
+    private let peerReviewInfo = "Each advisor critiques the others' answers, shown anonymized so there's no brand bias — it surfaces the weak spots the council finds in each other's reasoning."
+
     private var peerReviewGenerating: Bool {
         store.deliberationBusy && store.generatingRound == store.viewingRound
     }
@@ -1204,6 +1214,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Text("PEER REVIEW").font(Blue.mono(15, .bold)).tracking(2).foregroundStyle(Blue.ink)
+                InfoDot(text: peerReviewInfo)
                 Text("· advisors critique each other").font(Blue.mono(9)).foregroundStyle(Blue.sub)
                 Spacer()
                 if store.hasPeerReviewForViewedRound && !peerReviewGenerating {
@@ -1253,8 +1264,11 @@ struct ContentView: View {
                 }
             } else {
                 VStack(spacing: 14) {
+                    Text(peerReviewInfo)
+                        .font(Blue.body(13)).foregroundStyle(Blue.sub)
+                        .multilineTextAlignment(.center).lineSpacing(2).frame(maxWidth: 400)
                     Text("Not generated for this round yet.")
-                        .font(Blue.body(14)).foregroundStyle(Blue.sub)
+                        .font(Blue.mono(9)).tracking(1).foregroundStyle(Blue.dim)
                     Button { runRound { await store.peerReview() } } label: {
                         Text("GENERATE PEER REVIEW").font(Blue.mono(11, .bold)).tracking(1)
                             .foregroundStyle(store.canPeerReview ? Blue.ink : Blue.dim)
@@ -1593,6 +1607,34 @@ private struct ModeRow: View {
 
 // MARK: - Advisor panel
 
+/// A small ⓘ affordance that reveals a one/two-sentence explanation in a popover. Used in the
+/// Peer Review / Divergence / Synthesis headers so a newcomer knows what each view does.
+private struct InfoDot: View {
+    let text: String
+    @State private var open = false
+    @State private var hovering = false
+    var body: some View {
+        Button { open.toggle() } label: {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(hovering || open ? Blue.ink : Blue.sub)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("What is this?")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            Text(text)
+                .font(Blue.body(12.5))
+                .foregroundStyle(Blue.ink)
+                .lineSpacing(2)
+                .frame(width: 250, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(14)
+        }
+    }
+}
+
 private struct AdvisorPanel: View {
     let seat: Seat
     /// Provider name stored with this round's answer (used for the title when the seat is unassigned).
@@ -1865,6 +1907,13 @@ private struct AdvisorPanel: View {
                 Text(keyError).font(Blue.mono(10)).foregroundStyle(Blue.red)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if !validating, let url = seat.provider?.consoleURL {
+                Link(destination: url) {
+                    Text("Where do I get a key?  ↗").font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
             }
         }
         .frame(maxWidth: 280)
