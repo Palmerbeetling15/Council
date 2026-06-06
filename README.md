@@ -59,7 +59,11 @@ Don't have a key yet? Council links you straight to each provider's console from
 
 ## Install
 
-**Download** the notarized build from [Releases](../../releases) — unzip and open. Requires **macOS 14 or later**.
+**Download** the macOS build from the [latest release](../../releases/latest), unzip it, and drag `Council.app` to Applications. Requires **macOS 14 or later**.
+
+> ⚠️ **First launch:** Council isn't signed with a paid Apple certificate (it's a free, solo, open-source project), so macOS Gatekeeper warns once. To open it: **right-click `Council.app` → Open → Open**, or **System Settings → Privacy & Security → "Open Anyway"**. It opens normally after that.
+>
+> Rather build it yourself? The whole app is in this repo — see [Build from source](#build-from-source).
 
 ### Build from source
 
