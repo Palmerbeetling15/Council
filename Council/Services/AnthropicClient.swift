@@ -51,7 +51,9 @@ struct AnthropicClient: LLMClient {
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                        throw LLMError.message("HTTP \(http.statusCode)")
+                        var errBody = ""
+                        for try await line in bytes.lines { errBody += line; if errBody.count > 1200 { break } }
+                        throw LLMError.message(HTTPError.describe(http.statusCode, errBody))
                     }
                     var input = 0, output = 0
                     for try await line in bytes.lines {

@@ -71,6 +71,22 @@ enum LLMError: LocalizedError {
     }
 }
 
+/// Turns an HTTP error status + response body into a clear, user-facing message — surfaces the
+/// provider's own text ("model 'X' does not exist", "invalid api key", "rate limit", …) instead
+/// of a bare "HTTP 404", so a wrong model id or key is self-explanatory.
+enum HTTPError {
+    static func describe(_ status: Int, _ body: String) -> String {
+        if let data = body.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let e = obj["error"] as? [String: Any], let m = e["message"] as? String { return m }
+            if let m = obj["error"] as? String { return m }
+            if let m = obj["message"] as? String { return m }
+        }
+        let t = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "HTTP \(status)" : "HTTP \(status): \(t.prefix(160))"
+    }
+}
+
 /// Picks the right client for a provider. Claude has its own wire format; everything else
 /// (GPT, Gemini, DeepSeek, Grok, Mistral, Perplexity, OpenRouter, local Ollama) speaks the
 /// OpenAI `/chat/completions` format and shares one client, differing only by endpoint.
