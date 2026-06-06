@@ -91,6 +91,10 @@ shows the real fault line, and Synthesis hands you a decision-ready summary.
 Issues and PRs welcome. Council is one person's project — keep changes focused and the
 privacy guarantees intact: no telemetry, and keys never leave the Keychain.
 
+## Contact
+
+Questions, ideas, or feedback? Open an issue — or reach me at **joseph.thecouncil@gmail.com**.
+
 ## License
 
 [MIT](LICENSE) © 2026 Joseph
