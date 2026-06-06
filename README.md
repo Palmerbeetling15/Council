@@ -36,7 +36,7 @@ Gemini and more — each answers independently, and then the interesting part be
 
 ## Features
 
-- 🧠 **Up to nine providers** — Claude · GPT (OpenAI) · Gemini · DeepSeek · Grok (xAI) · Mistral · Perplexity · OpenRouter · Ollama (local)
+- 🧠 **Up to nine providers** — Claude · GPT (OpenAI) · Gemini · DeepSeek · Grok (xAI) · Mistral · Perplexity · OpenRouter · Ollama (local — needs [Ollama](https://ollama.com) installed & running + a model pulled, e.g. `ollama pull llama3.2`)
 - ⚡ **Live streaming** answers, side by side
 - 🎭 **Distinct personas** per seat (Analyst · Practitioner · Skeptic) for real divergence — not three ways of saying the same thing
 - 😈 **Devil's Advocate** role to pressure-test the consensus
