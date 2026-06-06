@@ -135,7 +135,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         case .mistral:          return "mistral-large-latest"
         case .perplexity:       return "sonar"
         case .openRouter:       return "openai/gpt-5.4-mini"
-        case .ollama:           return "llama3.3"
+        case .ollama:           return "llama3.2"
         case .foundationModels: return ""
         }
     }
@@ -154,7 +154,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         case .openRouter:       return ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6",
                                         "google/gemini-3.5-pro", "deepseek/deepseek-chat",
                                         "meta-llama/llama-4-70b-instruct"]
-        case .ollama:           return ["llama3.3", "qwen2.5", "deepseek-r1", "gemma3", "mistral", "phi4"]
+        case .ollama:           return ["llama3.2", "llama3.3", "qwen2.5", "deepseek-r1", "gemma3", "mistral", "phi4"]
         case .foundationModels: return []
         }
     }
