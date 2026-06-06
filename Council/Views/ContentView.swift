@@ -355,7 +355,7 @@ struct ContentView: View {
         mainUI
         // Fill the whole window so content can't size to its *ideal* width and get re-centered
         // (which is what shifted the view when NEW DIRECTIVE emptied the panels).
-        .frame(minWidth: 1040, maxWidth: .infinity, minHeight: 800, maxHeight: .infinity)
+        .frame(minWidth: 1040, maxWidth: .infinity, minHeight: 640, maxHeight: .infinity)
         .preferredColorScheme(scheme)
         .background { shortcutButtons }
         .onAppear { if !didOnboard { showOnboarding = true } }   // instant insert; the card animates itself in
@@ -657,37 +657,38 @@ struct ContentView: View {
     /// Entering the roundtable happens via New Directive, a preset, or a recent session.
     private var homeDashboard: some View {
         HStack(spacing: 10) {
-            // Everything fits in one glance — no scrolling. Hero on top, then three equal-height
-            // rows of paired cards that share the remaining height.
-            VStack(spacing: 10) {
-                HomeHero { q in
-                    query = q; screen = .council
-                    // If at least one advisor is connected, run it straight away (the "→" implies it
-                    // will start); otherwise land on the panels so the user can connect a key first.
-                    if store.seats.contains(where: store.hasKey) { ask() } else { canvasMode = .panels }
+            // Fills the window at a glance when there's room; scrolls when the window is short so the
+            // bottom cards never touch/clip the edge. minHeight tied to the viewport = "fill if it
+            // fits, scroll if it doesn't" — keeps the equal-height fill on large windows.
+            GeometryReader { geo in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 10) {
+                        HomeHero { q in
+                            query = q; screen = .council
+                            // If at least one advisor is connected, run it straight away (the "→" implies
+                            // it will start); otherwise land on the panels so the user can connect a key.
+                            if store.seats.contains(where: store.hasKey) { ask() } else { canvasMode = .panels }
+                        }
+                        // Grid pairs cards at equal height per row (no empty gap under the shorter card).
+                        Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                            GridRow {
+                                dashCard("USAGE", fill: true) { usageTiles }
+                                dashCard("SPEND", fill: true) { spendContent }
+                            }
+                            GridRow {
+                                dashCard("YOUR COUNCIL", fill: true) { councilOverview }
+                                dashCard("QUICK START", fill: true) { quickStartList }
+                            }
+                            GridRow {
+                                dashCard("PROVIDERS", fill: true) { providersBoard }
+                                dashCard("RECENT", fill: true) { recentList }
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .frame(minHeight: geo.size.height, alignment: .top)
                 }
-
-                // Grid pairs cards at equal height per row (so no empty gap under the shorter card)
-                // while each row stays its natural height — tight gaps, no greedy stretch.
-                Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                    GridRow {
-                        dashCard("USAGE", fill: true) { usageTiles }
-                        dashCard("SPEND", fill: true) { spendContent }
-                    }
-                    GridRow {
-                        dashCard("YOUR COUNCIL", fill: true) { councilOverview }
-                        dashCard("QUICK START", fill: true) { quickStartList }
-                    }
-                    GridRow {
-                        dashCard("PROVIDERS", fill: true) { providersBoard }
-                        dashCard("RECENT", fill: true) { recentList }
-                    }
-                }
-
-                Spacer(minLength: 0)   // leftover height sits at the very bottom, not between rows
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(16)
 
             colorRail.frame(width: 32).padding(.trailing, 6)
         }
