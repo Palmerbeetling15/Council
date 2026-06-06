@@ -64,7 +64,7 @@ Don't have a key yet? Council links you straight to each provider's console from
 ### Build from source
 
 ```sh
-git clone https://github.com/YOUR_USERNAME/Council.git
+git clone https://github.com/albertofettucini/Council.git
 cd Council
 open Council.xcodeproj   # Xcode 16+ (Xcode 26 for the Liquid Glass build)
 # ⌘R to run
