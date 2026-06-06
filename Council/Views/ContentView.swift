@@ -355,7 +355,7 @@ struct ContentView: View {
         mainUI
         // Fill the whole window so content can't size to its *ideal* width and get re-centered
         // (which is what shifted the view when NEW DIRECTIVE emptied the panels).
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 1040, maxWidth: .infinity, minHeight: 800, maxHeight: .infinity)
         .preferredColorScheme(scheme)
         .background { shortcutButtons }
         .onAppear { if !didOnboard { showOnboarding = true } }   // instant insert; the card animates itself in
