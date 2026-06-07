@@ -131,7 +131,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         case .openAI:           return "gpt-5.4-mini"
         case .gemini:           return "gemini-3.5-flash"
         case .deepSeek:         return "deepseek-chat"
-        case .grok:             return "grok-4"
+        case .grok:             return "grok-4.3"
         case .mistral:          return "mistral-large-latest"
         case .perplexity:       return "sonar"
         case .openRouter:       return "openai/gpt-5.4-mini"
@@ -145,10 +145,10 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
     var modelOptions: [String] {
         switch self {
         case .claude:           return ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
-        case .openAI:           return ["gpt-5.4", "gpt-5.4-mini", "o4-mini"]
+        case .openAI:           return ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
         case .gemini:           return ["gemini-3.5-pro", "gemini-3.5-flash"]
         case .deepSeek:         return ["deepseek-chat", "deepseek-reasoner"]
-        case .grok:             return ["grok-4", "grok-4-mini", "grok-3"]
+        case .grok:             return ["grok-4.3", "grok-4.1-fast", "grok-4-fast-reasoning"]
         case .mistral:          return ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"]
         case .perplexity:       return ["sonar", "sonar-pro", "sonar-reasoning"]
         case .openRouter:       return ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6",

@@ -355,7 +355,10 @@ struct ContentView: View {
         mainUI
         // Fill the whole window so content can't size to its *ideal* width and get re-centered
         // (which is what shifted the view when NEW DIRECTIVE emptied the panels).
-        .frame(minWidth: 1040, maxWidth: .infinity, minHeight: 640, maxHeight: .infinity)
+        // Min height = where the flexible PROVIDERS / RECENT row hits its content floor. The window
+        // stops here so that row never clips and its bottom stays level with the sidebar's SETTINGS;
+        // above it, dragging taller grows just that row.
+        .frame(minWidth: 1040, maxWidth: .infinity, minHeight: 720, maxHeight: .infinity)
         .preferredColorScheme(scheme)
         .background { shortcutButtons }
         .onAppear { if !didOnboard { showOnboarding = true } }   // instant insert; the card animates itself in
@@ -657,38 +660,42 @@ struct ContentView: View {
     /// Entering the roundtable happens via New Directive, a preset, or a recent session.
     private var homeDashboard: some View {
         HStack(spacing: 10) {
-            // Fills the window at a glance when there's room; scrolls when the window is short so the
-            // bottom cards never touch/clip the edge. minHeight tied to the viewport = "fill if it
-            // fits, scroll if it doesn't" — keeps the equal-height fill on large windows.
-            GeometryReader { geo in
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 10) {
-                        HomeHero { q in
-                            query = q; screen = .council
-                            // If at least one advisor is connected, run it straight away (the "→" implies
-                            // it will start); otherwise land on the panels so the user can connect a key.
-                            if store.seats.contains(where: store.hasKey) { ask() } else { canvasMode = .panels }
-                        }
-                        // Grid pairs cards at equal height per row (no empty gap under the shorter card).
-                        Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                            GridRow {
-                                dashCard("USAGE", fill: true) { usageTiles }
-                                dashCard("SPEND", fill: true) { spendContent }
-                            }
-                            GridRow {
-                                dashCard("YOUR COUNCIL", fill: true) { councilOverview }
-                                dashCard("QUICK START", fill: true) { quickStartList }
-                            }
-                            GridRow {
-                                dashCard("PROVIDERS", fill: true) { providersBoard }
-                                dashCard("RECENT", fill: true) { recentList }
-                            }
-                        }
-                    }
-                    .padding(16)
-                    .frame(minHeight: geo.size.height, alignment: .top)
+            // Cards fill the available height and shrink with the window. A minimum window height
+            // (set on the root) stops the resize before the cards hit their content floor — so they
+            // adapt down to a clean point, then the window won't shrink further (no clip).
+            VStack(spacing: 10) {
+                HomeHero { q in
+                    query = q; screen = .council
+                    // If at least one advisor is connected, run it straight away (the "→" implies it
+                    // will start); otherwise land on the panels so the user can connect a key first.
+                    if store.seats.contains(where: store.hasKey) { ask() } else { canvasMode = .panels }
                 }
+                // Top two rows keep their natural height (fill:true only equalises the two cards in a
+                // row; .fixedSize locks the block so it does NOT grow/shrink with the window).
+                Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                    GridRow {
+                        dashCard("USAGE", fill: true) { usageTiles }
+                        dashCard("SPEND", fill: true) { spendContent }
+                    }
+                    GridRow {
+                        dashCard("YOUR COUNCIL", fill: true) { councilOverview }
+                        dashCard("QUICK START", fill: true) { quickStartList }
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                // ONLY this row flexes: it absorbs all the extra height, so dragging the window's
+                // bottom edge up/down resizes just PROVIDERS / RECENT — and their bottom edge stays
+                // put, level with the sidebar's SETTINGS.
+                Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                    GridRow {
+                        dashCard("PROVIDERS", fill: true) { providersBoard }
+                        dashCard("RECENT", fill: true) { recentList }
+                    }
+                }
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(16)
 
             colorRail.frame(width: 32).padding(.trailing, 6)
         }

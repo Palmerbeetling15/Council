@@ -8,6 +8,16 @@ struct OpenAICompatibleClient: LLMClient {
     var temperature: Double? = nil
     var maxTokens: Int? = nil
 
+    /// Reasoning models (OpenAI o-series, DeepSeek R1, any "…-reasoning" variant) reject a custom
+    /// `temperature` — they only run at their fixed setting, and sending one 400s the whole call.
+    /// Detect them by id so we silently drop the override instead of failing the request.
+    private var isReasoningModel: Bool {
+        let name = model.lowercased().split(separator: "/").last.map(String.init) ?? model.lowercased()
+        if name.contains("reason") { return true }                      // deepseek-reasoner, sonar-reasoning, grok-…-reasoning
+        if let f = name.first, f == "o", name.dropFirst().first?.isNumber == true { return true }  // o1 / o3 / o4-mini …
+        return false
+    }
+
     func validate(apiKey: String) async throws {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -41,7 +51,8 @@ struct OpenAICompatibleClient: LLMClient {
                         return RequestBody.Message(role: msg.role.rawValue, content: .text(msg.text))
                     }
                     let body = RequestBody(model: model, messages: wire, max_tokens: maxTokens, stream: true,
-                                           stream_options: .init(include_usage: true), temperature: temperature)
+                                           stream_options: .init(include_usage: true),
+                                           temperature: isReasoningModel ? nil : temperature)
                     request.httpBody = try JSONEncoder().encode(body)
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)

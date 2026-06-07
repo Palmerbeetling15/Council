@@ -46,19 +46,23 @@ enum KeyValidation {
     static func interpret(status: Int, body: Data) throws {
         if (200..<300).contains(status) { return }
         let text = (String(data: body, encoding: .utf8) ?? "").lowercased()
-        let balance = text.contains("credit") || text.contains("balance")
-            || text.contains("quota") || text.contains("billing") || text.contains("insufficient")
-        let invalid = text.contains("api key") || text.contains("api_key")
-            || text.contains("invalid") || text.contains("unauthor")
         switch status {
         case 401, 403:
-            throw LLMError.message("API key is invalid or unauthorized.")
+            // The ONLY real "bad key" signal: the server rejected authentication.
+            throw LLMError.message("API key was rejected (unauthorized). Check you pasted the whole key and that it's for this provider.")
+        case 402:
+            throw LLMError.message("This key has no available balance — add credit / enable billing.")
         case 429:
-            throw LLMError.message("Quota / balance exceeded (rate limit).")
+            // Authenticated fine — a rate/quota limit, not a bad key. Only fail if it's truly out of funds.
+            if text.contains("insufficient") || text.contains("exceeded your current quota") {
+                throw LLMError.message("This key is out of quota or balance.")
+            }
+            return
         default:
-            if balance { throw LLMError.message("Insufficient balance or quota.") }
-            if invalid { throw LLMError.message("Invalid API key.") }
-            throw LLMError.message("Couldn't verify (HTTP \(status)).")
+            // 400 / 404 etc. mean the request got PAST auth (to model resolution), so the key itself
+            // is valid — the usual cause is the default model not being enabled for this key/project.
+            // Don't mislabel a working key as invalid; the real model error surfaces on the first ask.
+            return
         }
     }
 }
