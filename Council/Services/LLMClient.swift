@@ -39,6 +39,20 @@ protocol LLMClient {
     /// Cheap key check: makes a tiny authenticated call. Returns normally if the key
     /// works, throws a clear `LLMError` if it's invalid / out of balance / unusable.
     func validate(apiKey: String) async throws
+    /// One-shot completion for the structured "divergence verdict". OpenAI-compatible clients override
+    /// this to force JSON mode (reliable even on small local models); the default just collects the
+    /// normal stream (capable models follow a JSON instruction fine).
+    func judge(messages: [ChatMessage], apiKey: String) async throws -> String
+}
+
+extension LLMClient {
+    func judge(messages: [ChatMessage], apiKey: String) async throws -> String {
+        var full = ""
+        for try await chunk in stream(messages: messages, apiKey: apiKey) {
+            if case .text(let t) = chunk { full += t }
+        }
+        return full
+    }
 }
 
 /// Turns the HTTP status + body of a tiny test call into a clear, user-facing key error.

@@ -166,6 +166,14 @@ final class CouncilStore {
     Be specific and concise. Do NOT pick a winner; just map the landscape honestly.
     """
 
+    /// Tiny structured-verdict prompt, run as a SEPARATE json-mode call (reliable even on small local
+    /// models) so the score never depends on a free-form line the model might drop.
+    private static let verdictPrompt = """
+    You are a meticulous judge. Given the advisors' answers, output ONLY a JSON object and nothing else:
+    {"agreement": <integer 0-100, how much they agree on the bottom-line conclusion>, "camps": <integer number of distinct positions>, "outlier": <the single advisor label most apart, e.g. "Advisor B", or null>}
+    Agreement measures consensus, not correctness.
+    """
+
     private static let synthesisPrompt = """
     You are the council's synthesizer. Given the advisors' answers, produce a \
     final synthesis in markdown with two parts: a clear, decisive recommended answer first; then a \
@@ -354,6 +362,9 @@ final class CouncilStore {
     /// Read-only views of the current round's cross-model artifacts (used by the UI).
     var divergenceText: String? { viewedRound?.divergence }
     var synthesisText: String? { viewedRound?.synthesis }
+    var divergenceScore: Int? { viewedRound?.divergenceScore }
+    var divergenceCamps: Int? { viewedRound?.divergenceCamps }
+    var outlierName: String? { viewedRound?.outlier }
 
     /// Session token + cost totals (sum across rounds) — an estimate.
     var sessionInputTokens: Int { rounds.reduce(0) { $0 + $1.inputTokens } }
@@ -560,7 +571,10 @@ final class CouncilStore {
             if self.rounds.indices.contains(idx) { self.rounds[idx].divergence = self.deAnonymize(partial, remap) }
         }
         if rounds.indices.contains(idx) {
-            if let t = r.text, !r.cancelled { rounds[idx].divergence = deAnonymize(t, remap); addRoundUsage(idx, seat, r) }
+            if let t = r.text, !r.cancelled {
+                rounds[idx].divergence = deAnonymize(t, remap); addRoundUsage(idx, seat, r)
+                await computeVerdict(seat: seat, idx: idx, user: user, remap: remap)
+            }
             else if !r.cancelled { divergenceError = r.error ?? "Failed" }   // transient, never persisted as content
         }
         deliberationBusy = false
@@ -599,6 +613,7 @@ final class CouncilStore {
         // cross-model artifacts — clear them all so nothing stale survives next to the new answer.
         rounds[idx].peerReviews.removeAll()
         rounds[idx].divergence = nil
+        rounds[idx].divergenceScore = nil; rounds[idx].divergenceCamps = nil; rounds[idx].outlier = nil
         rounds[idx].synthesis = nil
         divergenceError = nil; synthesisError = nil
         rounds[idx].answers[seatID] = ""
@@ -684,6 +699,46 @@ final class CouncilStore {
         return out
     }
 
+    /// Separate, json-mode "verdict" call on the synthesizer: a reliable agreement score, camp count,
+    /// and outlier — instead of a free-form line a small model might drop. Free for local synthesizers.
+    private func computeVerdict(seat: Seat, idx: Int, user: String, remap: [String: String]) async {
+        guard let provider = seat.provider else { return }
+        var key = ""
+        if provider.requiresAPIKey {
+            guard let k = storedKey(for: provider) else { return }
+            key = k
+        }
+        let client = LLMClientFactory.make(for: provider, model: seat.model)
+        guard let raw = try? await client.judge(messages: [.system(Self.verdictPrompt), .user(user)], apiKey: key),
+              let v = Self.parseVerdictJSON(deAnonymize(raw, remap)) else { return }
+        if rounds.indices.contains(idx) {
+            rounds[idx].divergenceScore = v.agreement
+            rounds[idx].divergenceCamps = v.camps
+            rounds[idx].outlier = v.outlier
+        }
+    }
+
+    /// Robust parse of the judge's JSON — tolerant of the schema drift small models produce (camps as
+    /// an array → use its count, agreement as a string, "none"/null outliers).
+    private static func parseVerdictJSON(_ text: String) -> (agreement: Int, camps: Int?, outlier: String?)? {
+        guard let s = text.firstIndex(of: "{"), let e = text.lastIndex(of: "}"), s < e,
+              let data = String(text[s...e]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        func intify(_ v: Any?) -> Int? {
+            if let i = v as? Int { return i }
+            if let d = v as? Double { return Int(d) }
+            if let str = v as? String { return Int(str.filter(\.isNumber)) }
+            if let arr = v as? [Any] { return arr.count }
+            return nil
+        }
+        guard let a = intify(obj["agreement"]) else { return nil }
+        let camps = intify(obj["camps"])
+        var outlier: String? = nil
+        if let o = obj["outlier"] as? String, !o.isEmpty,
+           o.lowercased() != "none", o.lowercased() != "null" { outlier = o }
+        return (min(100, max(0, a)), camps, outlier)
+    }
+
     typealias StreamResult = (text: String?, input: Int, output: Int, cancelled: Bool, error: String?)
 
     /// Stream one model call, feeding the growing text to `onDelta`. Returns final text (nil on
@@ -699,34 +754,58 @@ final class CouncilStore {
         }
         let client = LLMClientFactory.make(for: provider, model: seat.model,
                                            temperature: seat.temperature, maxTokens: seat.maxTokens)
-        var full = "", input = 0, output = 0
         // Coalesce token updates to ~30fps. Streaming fires hundreds of deltas/answer; pushing
         // every one into the UI re-renders + re-parses markdown each time (O(n²)). We only flush
         // to the UI every ~33ms, and always flush the final text after the loop.
         let minInterval: UInt64 = 33_000_000   // 33ms in ns
-        var lastEmit: UInt64 = 0
-        var pending = false
-        do {
-            for try await chunk in client.stream(messages: messages, apiKey: apiKey) {
-                try Task.checkCancellation()   // Stop → exit → stream terminates → network cancels
-                switch chunk {
-                case .text(let t):
-                    full += t
-                    let now = DispatchTime.now().uptimeNanoseconds
-                    if now &- lastEmit >= minInterval { lastEmit = now; pending = false; onDelta(full) }
-                    else { pending = true }
-                case .usage(let i, let o): input = i; output = o
-                }
-            }
-            if pending { onDelta(full) }   // flush the last buffered text
-            return (full, input, output, false, nil)
-        } catch {
-            if pending { onDelta(full) }   // flush whatever streamed before the error/cancel
 
-            if error is CancellationError || (error as? URLError)?.code == .cancelled {
-                return (full.isEmpty ? nil : full, input, output, true, nil)
+        // One automatic retry on a transient connection drop (flaky Wi-Fi, an SSH-tunnelled remote
+        // Ollama, a brief blip). The long streaming connection is what tends to fail, so we re-run
+        // from scratch once before surfacing the error — the seat stays in its loading state throughout.
+        var lastError: Error = LLMError.message("Failed")
+        for attempt in 0..<2 {
+            var full = "", input = 0, output = 0
+            var lastEmit: UInt64 = 0
+            var pending = false
+            do {
+                for try await chunk in client.stream(messages: messages, apiKey: apiKey) {
+                    try Task.checkCancellation()   // Stop → exit → stream terminates → network cancels
+                    switch chunk {
+                    case .text(let t):
+                        full += t
+                        let now = DispatchTime.now().uptimeNanoseconds
+                        if now &- lastEmit >= minInterval { lastEmit = now; pending = false; onDelta(full) }
+                        else { pending = true }
+                    case .usage(let i, let o): input = i; output = o
+                    }
+                }
+                if pending { onDelta(full) }   // flush the last buffered text
+                return (full, input, output, false, nil)
+            } catch {
+                if pending { onDelta(full) }   // flush whatever streamed before the error/cancel
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    return (full.isEmpty ? nil : full, input, output, true, nil)
+                }
+                lastError = error
+                if attempt == 0, !Task.isCancelled, Self.isTransient(error) {
+                    try? await Task.sleep(nanoseconds: 500_000_000)   // brief backoff, then re-run once
+                    continue
+                }
+                return (nil, input, output, false, Self.friendlyError(error, provider: provider))
             }
-            return (nil, input, output, false, Self.friendlyError(error, provider: provider))
+        }
+        return (nil, 0, 0, false, Self.friendlyError(lastError, provider: provider))
+    }
+
+    /// A transient connection failure worth one automatic retry (vs a permanent auth/model error,
+    /// which a retry wouldn't fix).
+    private static func isTransient(_ error: Error) -> Bool {
+        guard let u = error as? URLError else { return false }
+        switch u.code {
+        case .networkConnectionLost, .timedOut, .cannotConnectToHost, .cannotFindHost,
+             .notConnectedToInternet, .cannotLoadFromNetwork, .dnsLookupFailed, .secureConnectionFailed:
+            return true
+        default: return false
         }
     }
 
@@ -738,7 +817,7 @@ final class CouncilStore {
             case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost,
                  .notConnectedToInternet, .timedOut, .cannotLoadFromNetwork, .dnsLookupFailed:
                 if provider == .ollama {
-                    return "Can't reach Ollama at localhost:11434 — is it running? Start it in Terminal with:  ollama serve"
+                    return "Can't reach Ollama at \(LLMProvider.ollamaHost) — is it running? Start it with 'ollama serve', or set a different address in Settings → Models."
                 }
                 return "Couldn't reach \(provider.panelName). Check your connection and try again."
             default:

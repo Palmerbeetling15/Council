@@ -41,6 +41,31 @@ struct OpenAICompatibleClient: LLMClient {
         try KeyValidation.interpret(status: (response as? HTTPURLResponse)?.statusCode ?? 0, body: data)
     }
 
+    /// JSON-mode one-shot used for the divergence verdict — forces valid JSON so even a small local
+    /// model (Ollama) returns a clean, parseable object instead of a dropped free-form line.
+    func judge(messages: [ChatMessage], apiKey: String) async throws -> String {
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        applyAttribution(to: &request)
+        let wire = messages.map { RequestBody.Message(role: $0.role.rawValue, content: .text($0.text)) }
+        let body = RequestBody(model: model, messages: wire, max_tokens: 400,
+                               response_format: .init(type: "json_object"))
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw LLMError.message(HTTPError.describe(http.statusCode, String(data: data, encoding: .utf8) ?? ""))
+        }
+        return (try? JSONDecoder().decode(JudgeResponse.self, from: data))?.choices.first?.message.content ?? ""
+    }
+
+    private struct JudgeResponse: Decodable {
+        let choices: [Choice]
+        struct Choice: Decodable { let message: Msg }
+        struct Msg: Decodable { let content: String }
+    }
+
     func stream(messages: [ChatMessage], apiKey: String) -> AsyncThrowingStream<StreamChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -107,8 +132,10 @@ struct OpenAICompatibleClient: LLMClient {
         var stream: Bool? = nil
         var stream_options: StreamOptions? = nil
         var temperature: Double? = nil
+        var response_format: ResponseFormat? = nil
         struct Message: Encodable { let role: String; let content: Content }
         struct StreamOptions: Encodable { let include_usage: Bool }
+        struct ResponseFormat: Encodable { let type: String }
     }
 
     /// Either a plain string (text-only) or an array of parts (with image).

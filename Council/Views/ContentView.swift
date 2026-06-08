@@ -358,7 +358,7 @@ struct ContentView: View {
         // Min height = where the flexible PROVIDERS / RECENT row hits its content floor. The window
         // stops here so that row never clips and its bottom stays level with the sidebar's SETTINGS;
         // above it, dragging taller grows just that row.
-        .frame(minWidth: 1040, maxWidth: .infinity, minHeight: 720, maxHeight: .infinity)
+        .frame(minWidth: 1300, maxWidth: .infinity, minHeight: 820, maxHeight: .infinity)
         .preferredColorScheme(scheme)
         .background { shortcutButtons }
         .onAppear { if !didOnboard { showOnboarding = true } }   // instant insert; the card animates itself in
@@ -975,6 +975,7 @@ struct ContentView: View {
                                      canGenerate: store.canSynthesize,
                                      error: store.divergenceError,
                                      disabledReason: deliberationDisabledReason,
+                                     verdict: store.divergenceScore.map { DivergenceVerdict(divergence: 100 - $0, camps: store.divergenceCamps, outlier: store.outlierName) },
                                      onExportImage: { copy in exportImage(title: "DIVERGENCE", text: store.divergenceText, copy: copy) },
                                      onGenerate: { runRound { await store.runDivergence() } })
                 case .synthesis:
@@ -1113,8 +1114,52 @@ struct ContentView: View {
     /// Full-width, calm reading view for the VIEWED round's cross-model artifact.
     /// Shows the stored artifact if present (never auto-regenerates); offers an explicit
     /// GENERATE for rounds that don't have one yet, and a REGENERATE in the header.
+    /// The analyst's structured read of a round, shown as a band atop the Divergence view.
+    struct DivergenceVerdict { let divergence: Int; let camps: Int?; let outlier: String? }
+
+    /// Score band: how far apart the council landed (high = more disagreement = the signal), how
+    /// many camps, and the outlier — plus the honest caveat that this is agreement, not truth.
+    @ViewBuilder private func verdictBand(_ v: DivergenceVerdict) -> some View {
+        let hot = v.divergence >= 50
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text("\(v.divergence)").font(Blue.mono(32, .bold)).foregroundStyle(hot ? Blue.accent : Blue.ink)
+                    Text("/100").font(Blue.mono(11)).foregroundStyle(Blue.dim)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("DIVERGENCE").font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.sub)
+                    Text("how far apart the council landed").font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                }
+                Spacer()
+                if let c = v.camps { verdictStat("\(c)", "CAMPS") }
+                if let o = v.outlier, !o.isEmpty { verdictStat(o.uppercased(), "OUTLIER") }
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Blue.glassStroke).frame(height: 6)
+                    Capsule().fill(hot ? Blue.accent : Blue.sub)
+                        .frame(width: max(6, geo.size.width * Double(v.divergence) / 100), height: 6)
+                }
+            }
+            .frame(height: 6)
+            Text("measures agreement, not correctness — models can share the same blind spot.")
+                .font(Blue.mono(9)).foregroundStyle(Blue.dim)
+        }
+        .padding(.horizontal, 28).padding(.vertical, 16)
+        .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
+    }
+
+    private func verdictStat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(value).font(Blue.mono(13, .bold)).foregroundStyle(Blue.ink).lineLimit(1)
+            Text(label).font(Blue.mono(8, .bold)).tracking(1.5).foregroundStyle(Blue.sub)
+        }
+    }
+
     private func deliberationView(title: String, info: String, text: String?, loading: Bool,
                                   canGenerate: Bool, error: String?, disabledReason: String,
+                                  verdict: DivergenceVerdict? = nil,
                                   onExportImage: @escaping (Bool) -> Void,
                                   onGenerate: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1171,6 +1216,8 @@ struct ContentView: View {
             }
             .padding(20)
             .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
+
+            if let v = verdict, !loading { verdictBand(v) }
 
             if loading {
                 VStack(spacing: 12) {
@@ -2368,6 +2415,8 @@ private struct SettingsSheet: View {
     /// Mirror the chosen background tint so the sheet harmonizes with the app behind it.
     @AppStorage("council.bgTint") private var bgTintIndex = 0
     @AppStorage("council.liteMode") private var liteMode = false
+    /// Local Ollama base URL — blank = localhost. Lets you point at Ollama on another machine.
+    @AppStorage("council.ollamaHost") private var ollamaHost = ""
     /// A council config staged for import, awaiting confirmation (it overwrites the live setup).
     @State private var pendingImport: CouncilConfig?
     /// A preset staged for "load" confirmation.
@@ -2458,6 +2507,21 @@ private struct SettingsSheet: View {
     // MARK: Grouped tabs
 
     @ViewBuilder private var modelsTab: some View {
+        section("OLLAMA ENDPOINT") {
+            Text("Where your local Ollama runs. Point it at Ollama on another machine on your network (e.g. a GPU box) — blank uses localhost.")
+                .font(Blue.body(11)).foregroundStyle(Blue.sub)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("http://localhost:11434", text: $ollamaHost)
+                .textFieldStyle(.plain).font(Blue.mono(12)).foregroundStyle(Blue.ink)
+                .padding(.vertical, 9).padding(.horizontal, 10)
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+            if !ollamaHost.isEmpty {
+                Button { ollamaHost = "" } label: {
+                    Text("RESET TO LOCALHOST").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.sub)
+                }
+                .buttonStyle(.plain)
+            }
+        }
         section("SYSTEM PROMPT — ALL MODELS") {
             promptEditor($store.sharedSystemPrompt, placeholder: "Shared instruction…", tall: true)
             Button { store.sharedSystemPrompt = CouncilStore.defaultSystemPrompt } label: {

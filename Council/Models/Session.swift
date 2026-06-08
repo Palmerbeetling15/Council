@@ -10,6 +10,12 @@ struct Round: Codable, Identifiable {
     var peerReviews: [Int: String] = [:]
     var divergence: String?
     var synthesis: String?
+    /// "Divergence verdict" the analyst computes in the SAME divergence call: how much the advisors
+    /// agree on the bottom line (0–100), how many distinct camps, and which advisor is the outlier
+    /// (a panel name, or nil). Measures agreement, NOT correctness — they can share a blind spot.
+    var divergenceScore: Int?
+    var divergenceCamps: Int?
+    var outlier: String?
     var inputTokens: Int = 0
     var outputTokens: Int = 0
     var costUSD: Double = 0

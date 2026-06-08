@@ -109,6 +109,17 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Base URL for local Ollama. Defaults to localhost; the user can point it at Ollama running on
+    /// another machine on their network (e.g. a GPU box) via Settings. Plain text (non-secret).
+    static let ollamaHostKey = "council.ollamaHost"
+    static var ollamaHost: String {
+        let raw = (UserDefaults.standard.string(forKey: ollamaHostKey) ?? "").trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return "http://localhost:11434" }
+        var h = (raw.hasPrefix("http://") || raw.hasPrefix("https://")) ? raw : "http://\(raw)"
+        while h.hasSuffix("/") { h.removeLast() }
+        return h
+    }
+
     /// OpenAI-compatible `/chat/completions` endpoint. nil for backends that don't use the
     /// generic client (Claude has its own; Foundation Models isn't networked).
     var openAIEndpoint: URL? {
@@ -120,7 +131,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         case .mistral:    return URL(string: "https://api.mistral.ai/v1/chat/completions")
         case .perplexity: return URL(string: "https://api.perplexity.ai/chat/completions")
         case .openRouter: return URL(string: "https://openrouter.ai/api/v1/chat/completions")
-        case .ollama:     return URL(string: "http://localhost:11434/v1/chat/completions")
+        case .ollama:     return URL(string: "\(Self.ollamaHost)/v1/chat/completions")
         case .claude, .foundationModels: return nil
         }
     }
@@ -131,7 +142,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
     var modelsEndpoint: URL? {
         switch self {
         case .claude:           return URL(string: "https://api.anthropic.com/v1/models")
-        case .ollama:           return URL(string: "http://localhost:11434/api/tags")
+        case .ollama:           return URL(string: "\(Self.ollamaHost)/api/tags")
         case .foundationModels: return nil
         default:
             return openAIEndpoint.flatMap {
