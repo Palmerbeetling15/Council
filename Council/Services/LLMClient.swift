@@ -106,6 +106,9 @@ enum LLMClientFactory {
             return OpenAICompatibleClient(endpoint: endpoint, model: model,
                                           temperature: temperature, maxTokens: maxTokens)
         }
+        if provider == .foundationModels {
+            return AppleFoundationClient(temperature: temperature, maxTokens: maxTokens)
+        }
         return UnavailableClient(reason: "\(provider.displayName) isn't available yet.")
     }
 }

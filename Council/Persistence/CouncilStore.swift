@@ -41,6 +41,30 @@ final class CouncilStore {
         keyCache = s
     }
 
+    /// Models the user actually has installed in local Ollama (from its `/api/tags` endpoint), so the
+    /// Ollama model picker lists what's installed instead of fixed suggestions. Empty when Ollama
+    /// isn't running — the picker then falls back to the suggestion list.
+    var ollamaModels: [String] = []
+
+    func refreshOllamaModels() async {
+        guard let url = URL(string: "http://localhost:11434/api/tags") else { return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 3
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return }
+            let names = try JSONDecoder().decode(OllamaTags.self, from: data).models.map(\.name).sorted()
+            if names != ollamaModels { ollamaModels = names }
+        } catch {
+            // Ollama not running / unreachable — keep the current list; picker falls back to suggestions.
+        }
+    }
+
+    private struct OllamaTags: Decodable {
+        let models: [Model]
+        struct Model: Decodable { let name: String }
+    }
+
     /// Full per-seat conversation (user/assistant turns, no system). Replayed on Round 1 calls
     /// so each model has its own prior context across rounds.
     private var history: [Int: [ChatMessage]] = [:]

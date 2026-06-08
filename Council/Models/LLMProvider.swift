@@ -17,9 +17,9 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    /// Providers offered in the seat picker (Foundation Models isn't wired yet).
+    /// Providers offered in the seat picker.
     static var selectable: [LLMProvider] {
-        [.claude, .openAI, .gemini, .deepSeek, .grok, .mistral, .perplexity, .openRouter, .ollama]
+        [.claude, .openAI, .gemini, .deepSeek, .grok, .mistral, .perplexity, .openRouter, .ollama, .foundationModels]
     }
 
     var displayName: String {
@@ -57,6 +57,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
     var pickerNote: String? {
         switch self {
         case .ollama:     return "local · no key"
+        case .foundationModels: return "on-device · free · no key"
         case .openRouter: return "one key · many models"
         case .perplexity: return "web-grounded"
         case .deepSeek:   return "cheap · reasoning"
@@ -136,7 +137,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         case .perplexity:       return "sonar"
         case .openRouter:       return "openai/gpt-5.4-mini"
         case .ollama:           return "llama3.2"
-        case .foundationModels: return ""
+        case .foundationModels: return "on-device"
         }
     }
 
@@ -155,7 +156,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
                                         "google/gemini-3.5-pro", "deepseek/deepseek-chat",
                                         "meta-llama/llama-4-70b-instruct"]
         case .ollama:           return ["llama3.2", "llama3.3", "qwen2.5", "deepseek-r1", "gemma3", "mistral", "phi4"]
-        case .foundationModels: return []
+        case .foundationModels: return ["on-device"]
         }
     }
 

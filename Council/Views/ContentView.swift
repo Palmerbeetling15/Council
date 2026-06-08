@@ -1019,7 +1019,8 @@ struct ContentView: View {
                                  onSetModel: { store.setModel($0, seatID: seat.id) },
                                  onPickProvider: { pickProvider($0, for: seat) },
                                  onResetSeat: { store.clearProvider(seatID: seat.id) },
-                                 onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } })
+                                 onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } },
+                                 ollamaModels: store.ollamaModels)
                         .frame(width: colWidth, height: geo.size.height)   // all three equal height
                         .glassPanel(corner: layout.panelCorner, strokeOpacity: hovered ? 2.2 : 1)
                         .contentShape(Rectangle())   // hover only registers over the panel's own rect
@@ -1029,6 +1030,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task { await store.refreshOllamaModels() }   // list the user's actually-installed Ollama models
         .alert("Same model on two seats?",
                isPresented: Binding(get: { pendingPick != nil }, set: { if !$0 { pendingPick = nil } }),
                presenting: pendingPick) { pick in
@@ -1041,6 +1043,7 @@ struct ContentView: View {
 
     /// Assign a provider to a seat, warning first if the provider is already used elsewhere.
     private func pickProvider(_ provider: LLMProvider, for seat: Seat) {
+        if provider == .ollama { Task { await store.refreshOllamaModels() } }   // refresh installed list on pick
         if store.providerInUse(provider, excluding: seat.id) {
             pendingPick = PendingPick(provider: provider, seatID: seat.id)
         } else {
@@ -1658,6 +1661,9 @@ private struct AdvisorPanel: View {
     let onPickProvider: (LLMProvider) -> Void
     let onResetSeat: () -> Void
     let onRegenerate: () -> Void
+    /// The user's installed local Ollama models (empty if Ollama isn't running). Drives the model
+    /// picker for an Ollama seat so it lists what's actually installed, not fixed suggestions.
+    let ollamaModels: [String]
 
     @State private var keyDraft = ""
     @State private var validating = false
@@ -1671,6 +1677,12 @@ private struct AdvisorPanel: View {
 
     private var hasAnswer: Bool { answer?.isEmpty == false }
     private var failed: Bool { failedMessage != nil }
+    /// Ollama lists the user's installed models; every other provider uses the fixed suggestions.
+    /// Falls back to suggestions when Ollama isn't running (empty list) so the picker is never blank.
+    private var modelChoices: [String] {
+        if seat.provider == .ollama, !ollamaModels.isEmpty { return ollamaModels }
+        return seat.provider?.modelOptions ?? []
+    }
     /// The model-selection step: after a provider is picked, before BEGIN. Comes BEFORE the key
     /// step so the user chooses a model first, then (if needed) enters a key.
     private var showingModelPicker: Bool {
@@ -1750,7 +1762,7 @@ private struct AdvisorPanel: View {
     /// Small, quiet menu showing the active model id — transparency, and change it anytime.
     private var modelMenu: some View {
         Menu {
-            ForEach(seat.provider?.modelOptions ?? [], id: \.self) { m in
+            ForEach(modelChoices, id: \.self) { m in
                 Button { onSetModel(m) } label: {
                     if m == seat.model { Label(m, systemImage: "checkmark") } else { Text(m) }
                 }
@@ -1819,7 +1831,7 @@ private struct AdvisorPanel: View {
 
     /// Shown right after a provider is picked: pick a model, then BEGIN to confirm.
     private var modelSelectionView: some View {
-        let options = seat.provider?.modelOptions ?? []
+        let options = modelChoices
         return VStack(alignment: .leading, spacing: 14) {
             Text("SELECT MODEL").font(Blue.mono(11, .bold)).tracking(2).foregroundStyle(Blue.sub)
             VStack(spacing: 0) {
