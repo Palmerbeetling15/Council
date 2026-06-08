@@ -18,11 +18,20 @@ struct OpenAICompatibleClient: LLMClient {
         return false
     }
 
+    /// OpenRouter ranks apps and (for some models) gates on attribution headers; a no-op for every
+    /// other host. The referer is just our public repo, so nothing personal is sent.
+    private func applyAttribution(to request: inout URLRequest) {
+        guard endpoint.host?.contains("openrouter.ai") == true else { return }
+        request.setValue("https://github.com/albertofettucini/Council", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("Council", forHTTPHeaderField: "X-Title")
+    }
+
     func validate(apiKey: String) async throws {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        applyAttribution(to: &request)
         // Smallest possible call: 1 output token. We only care about the HTTP status.
         let body = RequestBody(model: model,
                                messages: [.init(role: "user", content: .text("Hi"))],
@@ -40,6 +49,7 @@ struct OpenAICompatibleClient: LLMClient {
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                    applyAttribution(to: &request)
 
                     let wire: [RequestBody.Message] = messages.map { msg in
                         if let image = msg.image, msg.role == .user {
