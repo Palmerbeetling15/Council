@@ -1015,12 +1015,16 @@ struct ContentView: View {
                                  connected: connected(seat),
                                  canRegenerate: store.isViewingLatest,
                                  isAdversary: store.devilsAdvocateSeatID == seat.id,
-                                 onValidateKey: { await store.validateAndSaveKey($0, for: seat) },
+                                 onValidateKey: { k in
+                                     let err = await store.validateAndSaveKey(k, for: seat)
+                                     if err == nil, let p = seat.provider { await store.refreshModels(for: p) }
+                                     return err
+                                 },
                                  onSetModel: { store.setModel($0, seatID: seat.id) },
                                  onPickProvider: { pickProvider($0, for: seat) },
                                  onResetSeat: { store.clearProvider(seatID: seat.id) },
                                  onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } },
-                                 ollamaModels: store.ollamaModels)
+                                 availableModels: seat.provider.flatMap { store.providerModels[$0] } ?? [])
                         .frame(width: colWidth, height: geo.size.height)   // all three equal height
                         .glassPanel(corner: layout.panelCorner, strokeOpacity: hovered ? 2.2 : 1)
                         .contentShape(Rectangle())   // hover only registers over the panel's own rect
@@ -1030,7 +1034,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task { await store.refreshOllamaModels() }   // list the user's actually-installed Ollama models
+        .task { for p in Set(store.seats.compactMap(\.provider)) { await store.refreshModels(for: p) } }
         .alert("Same model on two seats?",
                isPresented: Binding(get: { pendingPick != nil }, set: { if !$0 { pendingPick = nil } }),
                presenting: pendingPick) { pick in
@@ -1043,7 +1047,7 @@ struct ContentView: View {
 
     /// Assign a provider to a seat, warning first if the provider is already used elsewhere.
     private func pickProvider(_ provider: LLMProvider, for seat: Seat) {
-        if provider == .ollama { Task { await store.refreshOllamaModels() } }   // refresh installed list on pick
+        Task { await store.refreshModels(for: provider) }   // pull this provider's real model list
         if store.providerInUse(provider, excluding: seat.id) {
             pendingPick = PendingPick(provider: provider, seatID: seat.id)
         } else {
@@ -1661,11 +1665,12 @@ private struct AdvisorPanel: View {
     let onPickProvider: (LLMProvider) -> Void
     let onResetSeat: () -> Void
     let onRegenerate: () -> Void
-    /// The user's installed local Ollama models (empty if Ollama isn't running). Drives the model
-    /// picker for an Ollama seat so it lists what's actually installed, not fixed suggestions.
-    let ollamaModels: [String]
+    /// Models actually available for this seat's provider, live-fetched (Ollama installs / OpenRouter
+    /// catalogue / a keyed provider's /models). Empty → fall back to the fixed suggestion list.
+    let availableModels: [String]
 
     @State private var keyDraft = ""
+    @State private var modelSearch = ""
     @State private var validating = false
     @State private var keyError: String?
     /// True only after the user picks a provider / enters a key this session — gates the
@@ -1677,11 +1682,10 @@ private struct AdvisorPanel: View {
 
     private var hasAnswer: Bool { answer?.isEmpty == false }
     private var failed: Bool { failedMessage != nil }
-    /// Ollama lists the user's installed models; every other provider uses the fixed suggestions.
-    /// Falls back to suggestions when Ollama isn't running (empty list) so the picker is never blank.
+    /// Live model list when we have one (Ollama installs / OpenRouter catalogue / a keyed /models),
+    /// otherwise the provider's fixed suggestions — so the picker is never blank.
     private var modelChoices: [String] {
-        if seat.provider == .ollama, !ollamaModels.isEmpty { return ollamaModels }
-        return seat.provider?.modelOptions ?? []
+        availableModels.isEmpty ? (seat.provider?.modelOptions ?? []) : availableModels
     }
     /// The model-selection step: after a provider is picked, before BEGIN. Comes BEFORE the key
     /// step so the user chooses a model first, then (if needed) enters a key.
@@ -1762,7 +1766,7 @@ private struct AdvisorPanel: View {
     /// Small, quiet menu showing the active model id — transparency, and change it anytime.
     private var modelMenu: some View {
         Menu {
-            ForEach(modelChoices, id: \.self) { m in
+            ForEach(Array(modelChoices.prefix(60)), id: \.self) { m in
                 Button { onSetModel(m) } label: {
                     if m == seat.model { Label(m, systemImage: "checkmark") } else { Text(m) }
                 }
@@ -1831,31 +1835,46 @@ private struct AdvisorPanel: View {
 
     /// Shown right after a provider is picked: pick a model, then BEGIN to confirm.
     private var modelSelectionView: some View {
-        let options = modelChoices
+        let all = modelChoices
+        let filtered = modelSearch.isEmpty ? all : all.filter { $0.localizedCaseInsensitiveContains(modelSearch) }
+        let long = all.count > 8   // OpenRouter-sized lists need search + a scroll cap
         return VStack(alignment: .leading, spacing: 14) {
             Text("SELECT MODEL").font(Blue.mono(11, .bold)).tracking(2).foregroundStyle(Blue.sub)
-            VStack(spacing: 0) {
-                ForEach(Array(options.enumerated()), id: \.element) { idx, m in
-                    Button { onSetModel(m) } label: {
-                        HStack {
-                            Text(m).font(Blue.mono(12)).foregroundStyle(Blue.ink)
-                            Spacer()
-                            if m == seat.model {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .bold)).foregroundStyle(Blue.ink)
+            if long {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(Blue.dim)
+                    TextField("filter \(all.count) models…", text: $modelSearch)
+                        .textFieldStyle(.plain).font(Blue.mono(11)).foregroundStyle(Blue.ink)
+                }
+                .padding(.vertical, 7).padding(.horizontal, 10)
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+            }
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(filtered.enumerated()), id: \.element) { idx, m in
+                        Button { onSetModel(m) } label: {
+                            HStack {
+                                Text(m).font(Blue.mono(12)).foregroundStyle(Blue.ink)
+                                    .lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                if m == seat.model {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 10, weight: .bold)).foregroundStyle(Blue.ink)
+                                }
                             }
+                            .padding(.vertical, 10).padding(.horizontal, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(m == seat.model ? Blue.glassBright : Color.clear)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.vertical, 10).padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(m == seat.model ? Blue.glassBright : Color.clear)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    if idx < options.count - 1 {
-                        Rectangle().fill(Blue.glassStroke).frame(height: 1)
+                        .buttonStyle(.plain)
+                        if idx < filtered.count - 1 {
+                            Rectangle().fill(Blue.glassStroke).frame(height: 1)
+                        }
                     }
                 }
             }
+            .frame(maxHeight: long ? 240 : nil)
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
 
             HStack {

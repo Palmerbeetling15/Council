@@ -41,28 +41,52 @@ final class CouncilStore {
         keyCache = s
     }
 
-    /// Models the user actually has installed in local Ollama (from its `/api/tags` endpoint), so the
-    /// Ollama model picker lists what's installed instead of fixed suggestions. Empty when Ollama
-    /// isn't running — the picker then falls back to the suggestion list.
-    var ollamaModels: [String] = []
+    /// Live model lists fetched per provider: Ollama's installed models (/api/tags), OpenRouter's
+    /// public catalogue (/models), and any keyed provider's accessible models (/models with the key).
+    /// Drives the picker so it offers what the user can actually use; empty for a provider falls back
+    /// to that provider's fixed suggestion list.
+    var providerModels: [LLMProvider: [String]] = [:]
 
-    func refreshOllamaModels() async {
-        guard let url = URL(string: "http://localhost:11434/api/tags") else { return }
+    func refreshModels(for provider: LLMProvider) async {
+        guard let url = provider.modelsEndpoint else { return }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 3
+        req.timeoutInterval = 6
+        // Ollama needs no auth; OpenRouter's list is public (send a key only if we have one); every
+        // other keyed provider needs its key to list the models that key can actually reach.
+        switch provider {
+        case .ollama:
+            break
+        case .claude:
+            guard let k = storedKey(for: provider) else { return }
+            req.setValue(k, forHTTPHeaderField: "x-api-key")
+            req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        case .openRouter:
+            if let k = storedKey(for: provider) { req.setValue("Bearer \(k)", forHTTPHeaderField: "Authorization") }
+        default:
+            guard let k = storedKey(for: provider) else { return }
+            req.setValue("Bearer \(k)", forHTTPHeaderField: "Authorization")
+        }
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return }
-            let names = try JSONDecoder().decode(OllamaTags.self, from: data).models.map(\.name).sorted()
-            if names != ollamaModels { ollamaModels = names }
+            let ids = Self.parseModelList(data)
+            if !ids.isEmpty, ids != providerModels[provider] { providerModels[provider] = ids }
         } catch {
-            // Ollama not running / unreachable — keep the current list; picker falls back to suggestions.
+            // Unreachable / no key — keep whatever we have; the picker falls back to suggestions.
         }
     }
 
-    private struct OllamaTags: Decodable {
-        let models: [Model]
-        struct Model: Decodable { let name: String }
+    private func storedKey(for provider: LLMProvider) -> String? {
+        guard let k = (try? KeychainStore.read(account: provider.keychainAccount)) ?? nil, !k.isEmpty else { return nil }
+        return k
+    }
+
+    /// Both shapes we encounter: OpenAI-style `{"data":[{"id":…}]}` and Ollama `{"models":[{"name":…}]}`.
+    private static func parseModelList(_ data: Data) -> [String] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        if let arr = obj["data"] as? [[String: Any]] { return arr.compactMap { $0["id"] as? String }.sorted() }
+        if let arr = obj["models"] as? [[String: Any]] { return arr.compactMap { $0["name"] as? String }.sorted() }
+        return []
     }
 
     /// Full per-seat conversation (user/assistant turns, no system). Replayed on Round 1 calls

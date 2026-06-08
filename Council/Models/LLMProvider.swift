@@ -125,6 +125,21 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// GET endpoint that lists this provider's available models, so the picker can offer what the
+    /// user can actually use instead of a fixed suggestion list. Ollama uses /api/tags; OpenRouter's
+    /// /models is public; everything else is the chat base with `/models` (queried with the key).
+    var modelsEndpoint: URL? {
+        switch self {
+        case .claude:           return URL(string: "https://api.anthropic.com/v1/models")
+        case .ollama:           return URL(string: "http://localhost:11434/api/tags")
+        case .foundationModels: return nil
+        default:
+            return openAIEndpoint.flatMap {
+                URL(string: $0.absoluteString.replacingOccurrences(of: "chat/completions", with: "models"))
+            }
+        }
+    }
+
     /// Default model id per provider. These move fast — update here if an API rejects the name.
     var defaultModel: String {
         switch self {
