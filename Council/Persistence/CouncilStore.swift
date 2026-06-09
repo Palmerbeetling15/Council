@@ -6,6 +6,9 @@ import UserNotifications
 /// Per-seat live state (applies to the round currently being generated).
 enum SeatStatus: Equatable { case idle, loading, failed(String) }
 
+/// Result of a "test connection" probe against the Ollama endpoint (Settings → Models).
+enum OllamaTestResult: Equatable { case ok(Int); case failed(String) }
+
 /// Central app state. A session is a list of `Round`s; each round keeps its own answers,
 /// peer reviews, divergence and synthesis. The user navigates rounds; nothing is wiped.
 @MainActor
@@ -73,6 +76,24 @@ final class CouncilStore {
             if !ids.isEmpty, ids != providerModels[provider] { providerModels[provider] = ids }
         } catch {
             // Unreachable / no key — keep whatever we have; the picker falls back to suggestions.
+        }
+    }
+
+    /// Explicit "test connection" for the Ollama endpoint (Settings → Models). Unlike refreshModels,
+    /// it reports a result the UI can show, and on success seeds providerModels so the picker
+    /// immediately shows the server's real models instead of the pre-populated suggestions.
+    func testOllamaConnection() async -> OllamaTestResult {
+        guard let url = LLMProvider.ollama.modelsEndpoint else { return .failed("That endpoint isn't a valid URL.") }
+        var req = URLRequest(url: url); req.timeoutInterval = 6
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return .failed("No response from that address.") }
+            guard http.statusCode == 200 else { return .failed("Reached it, but it returned HTTP \(http.statusCode).") }
+            let ids = Self.parseModelList(data)
+            if !ids.isEmpty { providerModels[.ollama] = ids }
+            return .ok(ids.count)
+        } catch {
+            return .failed("Couldn't reach \(LLMProvider.ollamaHost) — is Ollama running and reachable from this Mac?")
         }
     }
 
@@ -362,9 +383,21 @@ final class CouncilStore {
     /// Read-only views of the current round's cross-model artifacts (used by the UI).
     var divergenceText: String? { viewedRound?.divergence }
     var synthesisText: String? { viewedRound?.synthesis }
-    var divergenceScore: Int? { viewedRound?.divergenceScore }
+    /// The verdict's AGREEMENT score (0–100). Named honestly — the UI shows 100 − this as divergence.
+    var agreementScore: Int? { viewedRound?.divergenceScore }
     var divergenceCamps: Int? { viewedRound?.divergenceCamps }
     var outlierName: String? { viewedRound?.outlier }
+    /// The outlier advisor's own answer for the viewed round — for Dissent. Prefers the seat id
+    /// resolved at verdict time; falls back to panel-name matching for sessions saved before that.
+    var outlierAnswer: String? {
+        guard let round = viewedRound else { return nil }
+        if let sid = round.outlierSeatID, let a = round.answers[sid], !a.isEmpty { return a }
+        guard let name = round.outlier,
+              let sid = round.answerProviders.first(where: { $0.value == name })?.key,
+              let a = round.answers[sid], !a.isEmpty else { return nil }
+        return a
+    }
+    var hasDissent: Bool { outlierAnswer != nil }
 
     /// Session token + cost totals (sum across rounds) — an estimate.
     var sessionInputTokens: Int { rounds.reduce(0) { $0 + $1.inputTokens } }
@@ -379,20 +412,11 @@ final class CouncilStore {
             .filter { cal.isDate($0.updatedAt, equalTo: Date(), toGranularity: .month) }
             .reduce(0) { $0 + $1.totalCostUSD }
     }
-    var thisWeekCostUSD: Double {
-        let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-        return sessions.filter { $0.updatedAt >= weekAgo }.reduce(0) { $0 + $1.totalCostUSD }
-    }
-    var avgCostPerSession: Double { sessions.isEmpty ? 0 : allTimeCostUSD / Double(sessions.count) }
     /// Most-used model (panel name) across all rounds, for the dashboard's "top model".
     var topModelName: String? {
         var counts: [String: Int] = [:]
         for s in sessions { for r in s.rounds { for name in r.answerProviders.values { counts[name, default: 0] += 1 } } }
         return counts.max { $0.value < $1.value }?.key
-    }
-    /// Per-session cost of the last ~12 sessions, oldest → newest, for the spend sparkline.
-    var recentSessionCosts: [Double] {
-        sessions.sorted { $0.updatedAt < $1.updatedAt }.suffix(12).map { $0.totalCostUSD }
     }
     /// Whether a key exists for this provider — reads the cache, never the Keychain (so it's safe
     /// to call from a view body). Key-free providers (Ollama) are always "ready".
@@ -457,6 +481,17 @@ final class CouncilStore {
     var hasPeerReviewForViewedRound: Bool {
         viewedRound?.peerReviews.values.contains { !$0.isEmpty } ?? false
     }
+    /// One-round bounded debate: available once peer review exists, and only until it has run once
+    /// (hard cap — a single rebuttal round per round, so cost stays bounded).
+    var canRebut: Bool { hasPeerReviewForViewedRound && !hasRebuttalForViewedRound }
+    var hasRebuttalForViewedRound: Bool {
+        viewedRound?.rebuttals.values.contains { !$0.isEmpty } ?? false
+    }
+    /// The revised (or held) answer a seat gave in the rebuttal round, if any.
+    func viewedRebuttal(_ seatID: Int) -> String? {
+        guard let r = viewedRound?.rebuttals[seatID], !r.isEmpty else { return nil }
+        return r
+    }
     var synthesizerName: String? { synthesizerSeat?.provider?.panelName }
     var hasSession: Bool { rounds.contains { !$0.answeredSeatIDs.isEmpty } }
 
@@ -507,6 +542,9 @@ final class CouncilStore {
         deliberationBusy = true
         generatingRound = idx
         for s in answered { status[s.id] = .loading; rounds[idx].peerReviews[s.id] = "" }
+        // Re-running peer review invalidates the rebuttal round that followed the OLD reviews —
+        // clear it so DEBATE unlocks again instead of showing a stale final take.
+        rounds[idx].rebuttals.removeAll()
 
         await withTaskGroup(of: Void.self) { group in
             for (seat, myAnswer) in pairs {
@@ -558,6 +596,75 @@ final class CouncilStore {
         saveConversation()
     }
 
+    /// Bounded debate — one optional rebuttal round. Each advisor sees its own answer plus where the
+    /// whole council landed (anonymized, so no brand bias creeps back in) and either revises or holds,
+    /// briefly saying why. Hard-capped at a single round per round so cost can't run away.
+    func runRebuttal() async {
+        let idx = viewingRound
+        let answered = answeredSeats(in: idx)
+        guard answered.count >= 2, rounds.indices.contains(idx), !hasRebuttalForViewedRound else { return }
+        deliberationBusy = true
+        generatingRound = idx
+        for s in answered { status[s.id] = .loading; rounds[idx].rebuttals[s.id] = "" }
+        let pairs = answered.map { (seat: $0, answer: rounds[idx].answers[$0.id] ?? "") }
+
+        await withTaskGroup(of: Void.self) { group in
+            for seat in answered {
+                let myAnswer = rounds[idx].answers[seat.id] ?? ""
+                // Anonymize only the OTHER advisors (like peer review). Including the seat's own
+                // answer in the blind set makes it read its own position as a stranger's — and after
+                // de-anonymization it ends up "agreeing with itself" by name on screen.
+                let others = pairs.filter { $0.seat.id != seat.id }
+                var remap: [String: String] = [:]
+                let ctx = others.enumerated().map { i, p -> String in
+                    let label = "Advisor \(String(UnicodeScalar(65 + i)!))"
+                    remap[label] = p.seat.provider?.panelName ?? "Advisor"
+                    return "\(label):\n\(p.answer)"
+                }.joined(separator: "\n\n")
+                let prompt = """
+                The council was asked:
+
+                \(rounds[idx].question)
+
+                Your earlier answer:
+
+                \(myAnswer)
+
+                Here is where the other advisors landed (anonymized):
+
+                \(ctx)
+
+                Reconsider in light of the disagreement. If another position exposes a real weakness in \
+                yours, revise — and say what changed and why. If you still hold your position, say so and \
+                give the strongest reason it survives the critique. Be decisive; this is your final take.
+                """
+                let messages = [ChatMessage.system(systemPrompt(for: seat)), .user(prompt)]
+                group.addTask { @MainActor in
+                    let r = await self.streamCall(seat: seat, messages: messages) { partial in
+                        if self.rounds.indices.contains(idx) {
+                            self.rounds[idx].rebuttals[seat.id] = self.deAnonymize(partial, remap)
+                        }
+                    }
+                    guard self.rounds.indices.contains(idx) else { return }
+                    if let text = r.text, !r.cancelled {
+                        self.rounds[idx].rebuttals[seat.id] = self.deAnonymize(text, remap)
+                        self.status[seat.id] = .idle
+                        self.addRoundUsage(idx, seat, r)
+                    } else if r.cancelled {
+                        self.rounds[idx].rebuttals[seat.id] = nil
+                        self.status[seat.id] = .idle
+                    } else {
+                        self.rounds[idx].rebuttals[seat.id] = nil
+                        self.status[seat.id] = .failed(r.error ?? "Unknown error")
+                    }
+                }
+            }
+        }
+        deliberationBusy = false
+        generatingRound = nil
+        saveConversation()
+    }
+
     func runDivergence() async {
         let idx = viewingRound
         guard canDeliberate(idx), let seat = synthesizerSeat, rounds.indices.contains(idx) else { return }
@@ -565,7 +672,7 @@ final class CouncilStore {
         divergenceError = nil
         // Don't wipe an existing divergence up front: on a failed REGEN the prior good text stays,
         // and the stream replaces it from the first token on success.
-        let (ctx, remap) = anonymizedContext(idx)
+        let (ctx, remap, seatByLabel) = anonymizedContext(idx)
         let user = "Question:\n\(rounds[idx].question)\n\nThe advisors' answers (anonymized):\n\n\(ctx)"
         let r = await streamCall(seat: seat, messages: [.system(Self.divergencePrompt), .user(user)]) { partial in
             if self.rounds.indices.contains(idx) { self.rounds[idx].divergence = self.deAnonymize(partial, remap) }
@@ -573,7 +680,7 @@ final class CouncilStore {
         if rounds.indices.contains(idx) {
             if let t = r.text, !r.cancelled {
                 rounds[idx].divergence = deAnonymize(t, remap); addRoundUsage(idx, seat, r)
-                await computeVerdict(seat: seat, idx: idx, user: user, remap: remap)
+                await computeVerdict(seat: seat, idx: idx, user: user, remap: remap, seatByLabel: seatByLabel)
             }
             else if !r.cancelled { divergenceError = r.error ?? "Failed" }   // transient, never persisted as content
         }
@@ -586,7 +693,7 @@ final class CouncilStore {
         guard canDeliberate(idx), let seat = synthesizerSeat, rounds.indices.contains(idx) else { return }
         deliberationBusy = true
         synthesisError = nil
-        let (ctx, remap) = anonymizedContext(idx)
+        let (ctx, remap, _) = anonymizedContext(idx)
         let context = "Question:\n\(rounds[idx].question)\n\nThe advisors' answers (anonymized):\n\n\(ctx)"
         let r = await streamCall(seat: seat, messages: [.system(Self.synthesisPrompt), .user(context)]) { partial in
             if self.rounds.indices.contains(idx) { self.rounds[idx].synthesis = self.deAnonymize(partial, remap) }
@@ -609,11 +716,14 @@ final class CouncilStore {
         // retry-after-failure doesn't wrongly delete a previous round's exchange).
         let hadAnswer = !((rounds[idx].answers[seatID] ?? "").isEmpty)
         if hadAnswer, var h = history[seatID], h.count >= 2 { h.removeLast(2); history[seatID] = h }
-        // Changing one answer invalidates every peer review (they all read the old set) and both
-        // cross-model artifacts — clear them all so nothing stale survives next to the new answer.
+        // Changing one answer invalidates every peer review (they all read the old set), the rebuttal
+        // round, and both cross-model artifacts — clear them all so nothing stale survives next to
+        // the new answer (a surviving rebuttal would also lock DEBATE for this round forever).
         rounds[idx].peerReviews.removeAll()
+        rounds[idx].rebuttals.removeAll()
         rounds[idx].divergence = nil
-        rounds[idx].divergenceScore = nil; rounds[idx].divergenceCamps = nil; rounds[idx].outlier = nil
+        rounds[idx].divergenceScore = nil; rounds[idx].divergenceCamps = nil
+        rounds[idx].outlier = nil; rounds[idx].outlierSeatID = nil
         rounds[idx].synthesis = nil
         divergenceError = nil; synthesisError = nil
         rounds[idx].answers[seatID] = ""
@@ -680,16 +790,18 @@ final class CouncilStore {
     /// Build the answers for the synthesizer with ANONYMOUS, shuffled labels (Advisor A/B/C) so it
     /// can't tell which answer is its own and favor it. Returns the context plus a map from each
     /// anonymous label back to the real provider name (used to restore attribution in the output).
-    private func anonymizedContext(_ idx: Int) -> (context: String, remap: [String: String]) {
+    private func anonymizedContext(_ idx: Int) -> (context: String, remap: [String: String], seatByLabel: [String: Int]) {
         let answered = answeredSeats(in: idx).shuffled()
         var blocks: [String] = []
         var remap: [String: String] = [:]
+        var seatByLabel: [String: Int] = [:]   // lowercased label → seat id (verdict outlier resolution)
         for (i, s) in answered.enumerated() {
             let label = "Advisor \(String(UnicodeScalar(65 + i)!))"   // Advisor A, B, C…
             remap[label] = s.provider?.panelName ?? "Advisor"
+            seatByLabel[label.lowercased()] = s.id
             blocks.append("\(label):\n\(rounds[idx].answers[s.id] ?? "")")
         }
-        return (blocks.joined(separator: "\n\n"), remap)
+        return (blocks.joined(separator: "\n\n"), remap, seatByLabel)
     }
 
     /// Put the real provider names back into a generated artifact, for display.
@@ -701,7 +813,8 @@ final class CouncilStore {
 
     /// Separate, json-mode "verdict" call on the synthesizer: a reliable agreement score, camp count,
     /// and outlier — instead of a free-form line a small model might drop. Free for local synthesizers.
-    private func computeVerdict(seat: Seat, idx: Int, user: String, remap: [String: String]) async {
+    private func computeVerdict(seat: Seat, idx: Int, user: String,
+                                remap: [String: String], seatByLabel: [String: Int]) async {
         guard let provider = seat.provider else { return }
         var key = ""
         if provider.requiresAPIKey {
@@ -709,12 +822,24 @@ final class CouncilStore {
             key = k
         }
         let client = LLMClientFactory.make(for: provider, model: seat.model)
+        // Parse the RAW output — the outlier is still an anonymous label ("Advisor B"), which we
+        // resolve to a seat id HERE (case-insensitively). Matching by display name later is fragile:
+        // duplicate providers share a panel name, and judges drift on label casing.
         guard let raw = try? await client.judge(messages: [.system(Self.verdictPrompt), .user(user)], apiKey: key),
-              let v = Self.parseVerdictJSON(deAnonymize(raw, remap)) else { return }
+              let v = Self.parseVerdictJSON(raw) else { return }
         if rounds.indices.contains(idx) {
             rounds[idx].divergenceScore = v.agreement
             rounds[idx].divergenceCamps = v.camps
-            rounds[idx].outlier = v.outlier
+            if let label = v.outlier {
+                let k = label.lowercased().trimmingCharacters(in: .whitespaces)
+                rounds[idx].outlierSeatID = seatByLabel[k]
+                rounds[idx].outlier = remap[label]
+                    ?? remap.first { $0.key.lowercased() == k }?.value
+                    ?? label
+            } else {
+                rounds[idx].outlierSeatID = nil
+                rounds[idx].outlier = nil
+            }
         }
     }
 
@@ -830,19 +955,36 @@ final class CouncilStore {
     // MARK: - Export
 
     func exportMarkdown() -> String {
+        // Attribute by what's RECORDED on the round, not the current seat assignment — a reopened
+        // session may have different (or no) providers on its seats today.
+        func name(_ round: Round, _ seatID: Int) -> String {
+            round.answerProviders[seatID] ?? seats.first { $0.id == seatID }?.provider?.panelName ?? "Advisor"
+        }
         var out = "# Council\n\n"
         for (i, round) in rounds.enumerated() where !round.answeredSeatIDs.isEmpty {
             out += "## Round \(i + 1) — \(round.question)\n\n"
             for seat in seats where !((round.answers[seat.id] ?? "").isEmpty) {
-                out += "### \(seat.provider?.panelName ?? "Advisor") — `\(seat.model)`\n\n\(round.answers[seat.id] ?? "")\n\n"
+                // Only attach the model id when this seat's current provider is the one that answered.
+                let model = (seat.provider?.panelName == round.answerProviders[seat.id]) ? " — `\(seat.model)`" : ""
+                out += "### \(name(round, seat.id))\(model)\n\n\(round.answers[seat.id] ?? "")\n\n"
             }
             let reviews = seats.filter { !((round.peerReviews[$0.id] ?? "").isEmpty) }
             if !reviews.isEmpty {
                 out += "#### Peer Review\n\n"
-                for seat in reviews { out += "**\(seat.provider?.panelName ?? "Advisor"):** \(round.peerReviews[seat.id] ?? "")\n\n" }
+                for seat in reviews { out += "**\(name(round, seat.id)):** \(round.peerReviews[seat.id] ?? "")\n\n" }
+            }
+            let rebuts = seats.filter { !((round.rebuttals[$0.id] ?? "").isEmpty) }
+            if !rebuts.isEmpty {
+                out += "#### Debate — final takes\n\n"
+                for seat in rebuts { out += "**\(name(round, seat.id)):** \(round.rebuttals[seat.id] ?? "")\n\n" }
             }
             if let d = round.divergence { out += "#### Divergence\n\n\(d)\n\n" }
             if let s = round.synthesis { out += "#### Synthesis\n\n\(s)\n\n" }
+        }
+        if let cur = sessions.first(where: { $0.id == currentSessionID }),
+           let d = cur.decision, !d.isEmpty {
+            out += "## Decision\n\n\(d)\n\n"
+            if let o = cur.outcome, !o.isEmpty { out += "**How it turned out:** \(o)\n\n" }
         }
         return out
     }
@@ -899,9 +1041,14 @@ final class CouncilStore {
     func saveConversation() {
         guard hasSession else { return }
         if currentTitle.isEmpty { currentTitle = derivedTitle }
-        let s = Session(id: currentSessionID, title: currentTitle,
+        let prior = sessions.first { $0.id == currentSessionID }
+        var s = Session(id: currentSessionID, title: currentTitle,
                         createdAt: currentCreatedAt, updatedAt: Date(),
                         rounds: rounds, history: history)
+        // Carry the decision-journal fields forward — they live out-of-band from the live round state,
+        // so a plain rebuild would silently wipe them on the next save.
+        s.decision = prior?.decision; s.decisionAt = prior?.decisionAt
+        s.outcome = prior?.outcome; s.outcomeAt = prior?.outcomeAt
         if let url = sessionURL(s.id), let data = try? Self.sessionCoder.enc.encode(s) {
             try? data.write(to: url, options: .atomic)
         }
@@ -909,6 +1056,31 @@ final class CouncilStore {
         sessions.insert(s, at: 0)
         haystackCache[s.id] = nil   // its transcript changed → rebuild on next search
         checkSpendAlert()
+    }
+
+    // MARK: - Decision journal (local only)
+
+    /// Sessions that have a recorded decision, newest decision first — the journal feed.
+    var journal: [Session] {
+        sessions.filter { ($0.decision?.isEmpty == false) }
+                .sorted { ($0.decisionAt ?? .distantPast) > ($1.decisionAt ?? .distantPast) }
+    }
+    /// Record (or update) what the user actually decided after this council.
+    func recordDecision(_ text: String, for id: UUID) {
+        if id == currentSessionID && !sessions.contains(where: { $0.id == id }) { saveConversation() }
+        updateSession(id) { $0.decision = text; $0.decisionAt = Date() }
+    }
+    /// Record how a past decision turned out — closing the loop on whether the council's read held up.
+    func recordOutcome(_ text: String, for id: UUID) {
+        updateSession(id) { $0.outcome = text; $0.outcomeAt = Date() }
+    }
+    private func updateSession(_ id: UUID, _ mutate: (inout Session) -> Void) {
+        guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&sessions[i])
+        haystackCache[id] = nil   // the journal text is searchable → rebuild on next search
+        if let url = sessionURL(id), let data = try? Self.sessionCoder.enc.encode(sessions[i]) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     private func apply(_ s: Session) {

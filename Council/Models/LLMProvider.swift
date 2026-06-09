@@ -171,7 +171,7 @@ enum LLMProvider: String, CaseIterable, Identifiable, Codable {
     /// so an outdated list never blocks them.
     var modelOptions: [String] {
         switch self {
-        case .claude:           return ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
+        case .claude:           return ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
         case .openAI:           return ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
         case .gemini:           return ["gemini-3.5-pro", "gemini-3.5-flash"]
         case .deepSeek:         return ["deepseek-chat", "deepseek-reasoner"]

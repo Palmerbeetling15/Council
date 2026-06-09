@@ -103,7 +103,7 @@ private struct ThinkBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button { withAnimation(.easeInOut(duration: 0.18)) { open.toggle() } } label: {
+            Button { withAnimation(Motion.view) { open.toggle() } } label: {
                 HStack(spacing: 6) {
                     Image(systemName: open ? "chevron.down" : "chevron.right")
                         .font(.system(size: 8, weight: .bold))

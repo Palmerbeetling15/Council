@@ -45,7 +45,9 @@ struct AnthropicClient: LLMClient {
                         }
                         return RequestBody.Message(role: role, content: .text(msg.text))
                     }
-                    let body = RequestBody(model: model, max_tokens: maxTokens ?? 1024, system: system,
+                    // Anthropic REQUIRES max_tokens. The default must be generous — a low cap silently
+                    // truncates long council answers mid-sentence with no error surfaced.
+                    let body = RequestBody(model: model, max_tokens: maxTokens ?? 8192, system: system,
                                            messages: convo, stream: true, temperature: temperature)
                     request.httpBody = try JSONEncoder().encode(body)
 
@@ -62,6 +64,11 @@ struct AnthropicClient: LLMClient {
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         guard let data = payload.data(using: .utf8),
                               let ev = try? JSONDecoder().decode(StreamEvent.self, from: data) else { continue }
+                        // A mid-stream error event (overloaded etc.) must FAIL the call — otherwise the
+                        // partial text would be committed to history as if it were a complete answer.
+                        if ev.type == "error" {
+                            throw LLMError.message(ev.error?.message ?? "The provider returned an error mid-stream.")
+                        }
                         if let t = ev.delta?.text { continuation.yield(.text(t)) }
                         if let i = ev.message?.usage?.input_tokens { input = i }
                         if let o = ev.usage?.output_tokens { output = o }
@@ -77,12 +84,15 @@ struct AnthropicClient: LLMClient {
     }
 
     private struct StreamEvent: Decodable {
+        let type: String?
         let delta: Delta?
         let message: StartMessage?
         let usage: Usage?
+        let error: ErrorPayload?
         struct Delta: Decodable { let text: String? }
         struct StartMessage: Decodable { let usage: Usage? }
         struct Usage: Decodable { let input_tokens: Int?; let output_tokens: Int? }
+        struct ErrorPayload: Decodable { let message: String? }
     }
 
     private struct RequestBody: Encodable {

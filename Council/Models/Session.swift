@@ -16,12 +16,18 @@ struct Round: Codable, Identifiable {
     var divergenceScore: Int?
     var divergenceCamps: Int?
     var outlier: String?
+    /// Seat id of the outlier, resolved at verdict time from the anonymous label — robust against
+    /// label-case drift and duplicate providers (name matching alone can pick the wrong seat).
+    var outlierSeatID: Int?
     var inputTokens: Int = 0
     var outputTokens: Int = 0
     var costUSD: Double = 0
     /// Which provider produced each seat's answer (seat id → panel name), so a reopened session
     /// still shows "CLAUDE" on the panel even if that seat is currently unassigned.
     var answerProviders: [Int: String] = [:]
+    /// One-round "rebuttal" (bounded debate): each advisor's revised — or held — answer after seeing
+    /// where the council diverged. Empty until the user runs the debate round. Persisted.
+    var rebuttals: [Int: String] = [:]
 
     /// Seat ids that have a non-empty answer in this round.
     var answeredSeatIDs: Set<Int> { Set(answers.filter { !$0.value.isEmpty }.keys) }
@@ -29,6 +35,7 @@ struct Round: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, question, answers, peerReviews, divergence, synthesis
         case inputTokens, outputTokens, costUSD, answerProviders
+        case divergenceScore, divergenceCamps, outlier, outlierSeatID, rebuttals
     }
     init(question: String) { self.question = question }
     init(from d: Decoder) throws {
@@ -43,6 +50,11 @@ struct Round: Codable, Identifiable {
         outputTokens = (try? c.decode(Int.self, forKey: .outputTokens)) ?? 0
         costUSD = (try? c.decode(Double.self, forKey: .costUSD)) ?? 0
         answerProviders = (try? c.decode([Int: String].self, forKey: .answerProviders)) ?? [:]
+        divergenceScore = try? c.decodeIfPresent(Int.self, forKey: .divergenceScore)
+        divergenceCamps = try? c.decodeIfPresent(Int.self, forKey: .divergenceCamps)
+        outlier = try? c.decodeIfPresent(String.self, forKey: .outlier)
+        outlierSeatID = try? c.decodeIfPresent(Int.self, forKey: .outlierSeatID)
+        rebuttals = (try? c.decode([Int: String].self, forKey: .rebuttals)) ?? [:]
     }
 }
 
@@ -55,14 +67,22 @@ struct Session: Codable, Identifiable {
     var updatedAt: Date
     var rounds: [Round]
     var history: [Int: [ChatMessage]]
+    /// Decision journal (local-only): what the user actually chose after consulting this council, and
+    /// later how it turned out. Optional → older saved sessions decode fine (synthesized Codable).
+    var decision: String? = nil
+    var decisionAt: Date? = nil
+    var outcome: String? = nil
+    var outcomeAt: Date? = nil
 
-    /// Text used for searching this session (title + every question + every answer).
+    /// Text used for searching this session (title + every question + every answer + the journal).
     var searchHaystack: String {
         var s = title
         for r in rounds {
             s += " " + r.question
             for a in r.answers.values { s += " " + a }
         }
+        if let d = decision { s += " " + d }
+        if let o = outcome { s += " " + o }
         return s.lowercased()
     }
 

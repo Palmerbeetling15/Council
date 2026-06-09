@@ -43,7 +43,14 @@ struct OpenAICompatibleClient: LLMClient {
 
     /// JSON-mode one-shot used for the divergence verdict — forces valid JSON so even a small local
     /// model (Ollama) returns a clean, parseable object instead of a dropped free-form line.
+    /// Not every OpenAI-compatible provider supports `response_format` (some 400 on it) — on any
+    /// failure we retry once WITHOUT it, since capable models follow the JSON instruction anyway.
     func judge(messages: [ChatMessage], apiKey: String) async throws -> String {
+        do { return try await judgeOnce(messages, apiKey: apiKey, jsonMode: true) }
+        catch { return try await judgeOnce(messages, apiKey: apiKey, jsonMode: false) }
+    }
+
+    private func judgeOnce(_ messages: [ChatMessage], apiKey: String, jsonMode: Bool) async throws -> String {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -51,7 +58,7 @@ struct OpenAICompatibleClient: LLMClient {
         applyAttribution(to: &request)
         let wire = messages.map { RequestBody.Message(role: $0.role.rawValue, content: .text($0.text)) }
         let body = RequestBody(model: model, messages: wire, max_tokens: 400,
-                               response_format: .init(type: "json_object"))
+                               response_format: jsonMode ? .init(type: "json_object") : nil)
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
