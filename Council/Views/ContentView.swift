@@ -3,6 +3,8 @@
 //  Council
 //
 
+import CouncilKit
+import Sparkle
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
@@ -335,7 +337,17 @@ struct ContentView: View {
     /// Live layout tuner (⌘D) — drag sliders to dial in spacing, then tell me the numbers.
     private let layout = Layout.shared   // fixed layout constants (tuner removed)
 
-    /// Which canvas the user is looking at: the 3-panel round, or a full-width deliberation artifact.
+    /// Single-page flow: scroll proxy for gentle stage reveals, and the peer-review disclosure.
+    @State private var flowProxy: ScrollViewProxy?
+    @State private var peerReviewExpanded = false
+
+    /// Two session layouts, user's choice (Settings → App): "flow" = one page, stages beneath the
+    /// answers; "classic" = each stage is its own screen in the sidebar (the pre-1.1 paradigm).
+    @AppStorage("council.layout") private var layoutMode = "flow"
+    private var isClassic: Bool { layoutMode == "classic" }
+    /// Brief frosted interlude while the layout swaps — selecting a mode shouldn't snap.
+    @State private var modeSwitching = false
+    /// Which canvas Classic mode is showing (panels or one full-screen deliberation artifact).
     enum CanvasMode { case panels, peerReview, divergence, synthesis, dissent, debate }
     @State private var canvasMode: CanvasMode = .panels
 
@@ -388,6 +400,31 @@ struct ContentView: View {
             SettingsSheet(store: store, appearance: $appearance) { showSettings = false }
                 .preferredColorScheme(scheme)
         }
+        // Layout switch (Settings → App): close the sheet, a brief frosted interlude, then the
+        // chosen canvas. Lives on the BODY so it fires from any screen, not just the roundtable.
+        .onChange(of: layoutMode) {
+            showSettings = false
+            canvasMode = .panels
+            screen = .council
+            withAnimation(Motion.quick) { modeSwitching = true }
+            Task {
+                try? await Task.sleep(for: .milliseconds(850))
+                withAnimation(Motion.view) { modeSwitching = false }
+            }
+        }
+        .overlay {
+            if modeSwitching {
+                ZStack {
+                    Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        Text(isClassic ? "CLASSIC LAYOUT" : "FLOW LAYOUT")
+                            .font(Blue.mono(11, .bold)).tracking(3).foregroundStyle(Blue.sub)
+                        FillBar(once: true).frame(maxWidth: 220)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
         .onAppear { installKeyMonitor() }
         .onDisappear { removeKeyMonitor() }
     }
@@ -419,7 +456,7 @@ struct ContentView: View {
     /// Invisible buttons that carry keyboard shortcuts (keyboard-first ethos).
     private var shortcutButtons: some View {
         Group {
-            Button("") { if !isBusy { store.newSession(); canvasMode = .panels; screen = .council } }
+            Button("") { if !isBusy { store.newSession(); screen = .council } }
                 .keyboardShortcut("n", modifiers: .command)
             Button("") { showSettings = true }
                 .keyboardShortcut(",", modifiers: .command)
@@ -429,6 +466,14 @@ struct ContentView: View {
                 .keyboardShortcut("]", modifiers: .command)
             Button("") { if store.hasSession { Exporter.copy(store.exportMarkdown()) } }
                 .keyboardShortcut("e", modifiers: .command)
+            Button("") { if store.hasSession { Exporter.saveMarkdown(store.exportDecisionMemo(), name: "council-memo") } }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+            Button("") { screen = .home }
+                .keyboardShortcut("1", modifiers: .command)
+            Button("") { screen = .council }
+                .keyboardShortcut("2", modifiers: .command)
+            Button("") { screen = .journal }
+                .keyboardShortcut("3", modifiers: .command)
         }
         .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
     }
@@ -515,7 +560,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: layout.sidebarTopInset)
 
-            Button(action: { store.newSession(); canvasMode = .panels; screen = .council }) {
+            Button(action: { store.newSession(); screen = .council }) {
                 HStack(spacing: 8) {
                     Image(systemName: "plus").font(.system(size: 12, weight: .bold))
                     Text("NEW DIRECTIVE").font(Blue.mono(11, .bold)).tracking(1)
@@ -540,10 +585,15 @@ struct ContentView: View {
                      hint: "Record what you decided — and how it turned out",
                      action: { screen = .journal })
 
+            // Flow: the session is ONE page, so no stage nav. Classic: the stages live here,
+            // exactly like pre-1.1.
             modeItem("point.3.connected.trianglepath.dotted", "ROUNDTABLE",
-                     state: (screen == .council && canvasMode == .panels) ? .active : .button,
+                     state: (screen == .council && (!isClassic || canvasMode == .panels)) ? .active : .button,
+                     hint: isClassic ? "The three advisors, side by side"
+                                     : "The session — answers up top, analysis flows in below",
                      action: { screen = .council; canvasMode = .panels })
 
+            if isClassic {
             modeItem("arrow.2.squarepath", "PEER REVIEW",
                      state: (screen == .council && canvasMode == .peerReview) ? .active
                           : ((store.canPeerReview || store.hasPeerReviewForViewedRound) ? .button : .locked),
@@ -583,6 +633,9 @@ struct ContentView: View {
                      hint: synthesisAvailable ? "Final answer that preserves the dissent"
                                               : "Answer ≥2 advisors first",
                      action: synthesisAvailable ? { screen = .council; canvasMode = .synthesis } : nil)
+
+            }
+
 
             historySection
 
@@ -673,7 +726,7 @@ struct ContentView: View {
             .frame(height: 16).padding(.horizontal, 18).padding(.vertical, 10)
         } else {
             Button {
-                store.openSession(s); canvasMode = .panels; screen = .council
+                store.openSession(s); screen = .council
             } label: {
                 Text(s.title.isEmpty ? "Untitled" : s.title)
                     .font(Blue.mono(11)).lineLimit(1).truncationMode(.tail)
@@ -702,6 +755,8 @@ struct ContentView: View {
             Button("Copy markdown") { Exporter.copy(store.exportMarkdown()) }
             Button("Save markdown…") { Exporter.saveMarkdown(store.exportMarkdown(), name: "council") }
             Button("Save PDF…") { Exporter.savePDF(store.exportMarkdown(), name: "council") }
+            Divider()
+            Button("Save decision memo…") { Exporter.saveMarkdown(store.exportDecisionMemo(), name: "council-memo") }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 11, weight: .bold))
@@ -735,7 +790,7 @@ struct ContentView: View {
                     query = q; screen = .council
                     // If at least one advisor is connected, run it straight away (the "→" implies it
                     // will start); otherwise land on the panels so the user can connect a key first.
-                    if store.seats.contains(where: store.hasKey) { ask() } else { canvasMode = .panels }
+                    if store.seats.contains(where: store.hasKey) { ask() }
                 }
                 // Slim merged stats (was the USAGE + SPEND cards) — one quiet glance row, fixed height.
                 dashCard("USAGE") { statStrip }
@@ -865,7 +920,7 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                 }
             }
-            Button(action: { screen = .council; canvasMode = .panels }) {
+            Button(action: { screen = .council }) {
                 HStack(spacing: 6) {
                     Image(systemName: "slider.horizontal.3").font(.system(size: 9, weight: .bold))
                     Text("CONFIGURE").font(Blue.mono(9, .bold)).tracking(1)
@@ -883,7 +938,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 7) {
             ForEach(Array(CouncilConfig.presets.enumerated()), id: \.offset) { _, preset in
                 Button(action: {
-                    store.applyConfig(preset); store.newSession(); canvasMode = .panels; screen = .council
+                    store.applyConfig(preset); store.newSession(); screen = .council
                 }) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(preset.name).font(Blue.mono(10, .bold)).foregroundStyle(Blue.ink)
@@ -908,7 +963,7 @@ struct ContentView: View {
             } else {
                 VStack(spacing: 4) {
                     ForEach(store.sessions.prefix(4)) { s in
-                        Button(action: { store.openSession(s); canvasMode = .panels; screen = .council }) {
+                        Button(action: { store.openSession(s); screen = .council }) {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 10) {
                                     Text(s.title.isEmpty ? "Untitled" : s.title)
@@ -956,165 +1011,124 @@ struct ContentView: View {
         VStack(spacing: layout.canvasRowGap) {
             if store.roundCount > 0 { roundNavigator }
             Group {
-                switch canvasMode {
-                case .panels:
-                    panelGrid
-                case .peerReview:
-                    peerReviewView
-                case .divergence:
-                    deliberationView(title: "DIVERGENCE",
-                                     info: "Where the council disagrees. It skips what everyone already shares and pulls out the real fault lines — what they split on, and why.",
-                                     text: store.divergenceText,
-                                     loading: store.deliberationBusy && store.divergenceText == nil,
-                                     canGenerate: store.canSynthesize,
-                                     error: store.divergenceError,
-                                     disabledReason: deliberationDisabledReason,
-                                     verdict: store.agreementScore.map { DivergenceVerdict(divergence: 100 - $0, camps: store.divergenceCamps, outlier: store.outlierName) },
-                                     onExportImage: { copy in exportImage(title: "DIVERGENCE", text: store.divergenceText, copy: copy) },
-                                     onGenerate: { runRound { await store.runDivergence() } })
-                case .synthesis:
-                    deliberationView(title: "SYNTHESIS",
-                                     info: "The council's answers distilled into one — the common ground plus the strongest individual points, for a single, decision-ready read.",
-                                     text: store.synthesisText,
-                                     loading: store.deliberationBusy && store.synthesisText == nil,
-                                     canGenerate: store.canSynthesize,
-                                     error: store.synthesisError,
-                                     disabledReason: deliberationDisabledReason,
-                                     onExportImage: { copy in exportImage(title: "SYNTHESIS", text: store.synthesisText, copy: copy) },
-                                     onGenerate: { runRound { await store.runSynthesis() } })
-                case .dissent:
-                    dissentView
-                case .debate:
-                    debateView
-                }
+                if isClassic { classicCanvas } else { sessionFlow }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             directiveInput
         }
         .padding(.horizontal, 4).padding(.top, 2).padding(.bottom, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Gentle reveal: when the pipeline moves to a new stage, ease its card into view. Fires
+        // only on pipeline transitions the user initiated — never while they're idly reading.
+        .onChange(of: store.pipelineStage) { _, stage in
+            guard !isClassic, let stage, let target = stageAnchor(stage) else { return }
+            withAnimation(Motion.view) { flowProxy?.scrollTo(target, anchor: .bottom) }
+        }
+        .onChange(of: store.viewingRound) {
+            peerReviewExpanded = false
+            if !isClassic { flowProxy?.scrollTo("flow.panels", anchor: .top) }
+        }
+
     }
 
-    private var panelGrid: some View {
-        // Each panel is locked to exactly one-third of the available width. Without this, a seat
-        // whose content has a wide intrinsic size (the model picker) would stretch its column and
-        // push the whole window wider — so columns must never size to their content.
+    private func stageAnchor(_ stage: String) -> String? {
+        switch stage {
+        case "Peer review": return "stage.pr"
+        case "Divergence":  return "stage.div"
+        case "Debate":      return "stage.debate"
+        case "Synthesis":   return "stage.syn"
+        default:            return nil
+        }
+    }
+
+    /// The single session page: the signature 3 panels fill the first viewport; the deliberation
+    /// stages flow in below as they complete. No mode switching — just scroll.
+    private var sessionFlow: some View {
         GeometryReader { geo in
-            let gap: CGFloat = layout.panelGap
-            let colWidth = max(0, (geo.size.width - gap * 2) / 3)   // 2 gaps
-            HStack(alignment: .top, spacing: gap) {
-                ForEach(store.seats) { seat in
-                    let hovered = hoveredSeat == seat.id
-
-                    AdvisorPanel(seat: seat,
-                                 answeredProvider: store.viewedAnswerProvider(seat.id),
-                                 answer: store.viewedAnswer(seat.id),
-                                 loading: store.generatingRound == store.viewingRound && store.status[seat.id] == .loading,
-                                 failedMessage: panelFailure(seat.id),
-                                 connected: connected(seat),
-                                 canRegenerate: store.isViewingLatest,
-                                 isAdversary: store.devilsAdvocateSeatID == seat.id,
-                                 onValidateKey: { k in
-                                     let err = await store.validateAndSaveKey(k, for: seat)
-                                     if err == nil, let p = seat.provider { await store.refreshModels(for: p) }
-                                     return err
-                                 },
-                                 onSetModel: { store.setModel($0, seatID: seat.id) },
-                                 onPickProvider: { pickProvider($0, for: seat) },
-                                 onResetSeat: { store.clearProvider(seatID: seat.id) },
-                                 onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } },
-                                 availableModels: seat.provider.flatMap { store.providerModels[$0] } ?? [])
-                        .frame(width: colWidth, height: geo.size.height)   // all three equal height
-                        .glassPanel(corner: layout.panelCorner, strokeOpacity: hovered ? 2.2 : 1)
-                        .contentShape(Rectangle())   // hover only registers over the panel's own rect
-                        .onHover { hoveredSeat = $0 ? seat.id : (hoveredSeat == seat.id ? nil : hoveredSeat) }
-                        .id(seat.id)   // bind the panel's @State (begun/justPicked) to its seat
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: layout.canvasRowGap) {
+                        panelGrid
+                            .frame(height: geo.size.height)
+                            .id("flow.panels")
+                        stageFlow
+                    }
                 }
+                .onAppear { flowProxy = proxy }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Fetch only lists we don't have yet — this view re-appears on every canvas switch, and
-        // key-save / provider-pick / test-connection already refresh on change.
-        .task { for p in Set(store.seats.compactMap(\.provider)) where store.providerModels[p] == nil { await store.refreshModels(for: p) } }
-        .alert("Same model on two seats?",
-               isPresented: Binding(get: { pendingPick != nil }, set: { if !$0 { pendingPick = nil } }),
-               presenting: pendingPick) { pick in
-            Button("Continue") { store.setProvider(pick.provider, seatID: pick.seatID); pendingPick = nil }
-            Button("Cancel", role: .cancel) { pendingPick = nil }
-        } message: { pick in
-            Text("\(pick.provider.panelName) is already on another seat. Running it twice spends extra tokens and usually reduces divergence.")
+    }
+
+    /// Stage cards in pipeline order. Each appears once its content exists; the stage currently
+    /// generating shows a quiet progress hint in its future slot.
+    @ViewBuilder private var stageFlow: some View {
+        let running = store.pipelineStage
+        if store.hasPeerReviewForViewedRound {
+            peerReviewFlowCard.id("stage.pr").transition(.opacity)
+        } else if running == "Peer review" {
+            stageProgressCard("PEER REVIEW").id("stage.pr")
+        }
+        if store.divergenceText?.isEmpty == false {
+            divergenceFlowCard.id("stage.div").transition(.opacity)
+        } else if running == "Divergence" {
+            stageProgressCard("DIVERGENCE").id("stage.div")
+        }
+        if store.hasRebuttalForViewedRound {
+            debateFlowCard.id("stage.debate").transition(.opacity)
+        } else if running == "Debate" {
+            stageProgressCard("DEBATE").id("stage.debate")
+        } else if store.canRebut, running == nil, !store.isWorking {
+            debateOfferCard.id("stage.debate")
+        }
+        if store.synthesisText?.isEmpty == false {
+            synthesisFlowCard.id("stage.syn").transition(.opacity)
+        } else if running == "Synthesis" {
+            stageProgressCard("SYNTHESIS").id("stage.syn")
+        }
+        if store.hasDissent {
+            dissentFlowCard.id("stage.dissent").transition(.opacity)
+        }
+        if showRunAnalysis {
+            runAnalysisCard
+        }
+        Color.clear.frame(height: 2)
+    }
+
+    /// Classic layout: the pre-1.1 canvas — panels, or ONE full-screen deliberation stage,
+    /// chosen from the sidebar. Restored verbatim; gated behind Settings → App → Layout.
+    @ViewBuilder private var classicCanvas: some View {
+        switch canvasMode {
+        case .panels:
+            panelGrid
+        case .peerReview:
+            peerReviewView
+        case .divergence:
+            deliberationView(title: "DIVERGENCE",
+                             info: divergenceInfo,
+                             text: store.divergenceText,
+                             loading: store.deliberationBusy && store.divergenceText == nil,
+                             canGenerate: store.canSynthesize,
+                             error: store.divergenceError,
+                             disabledReason: deliberationDisabledReason,
+                             verdict: store.agreementScore.map { DivergenceVerdict(divergence: 100 - $0, camps: store.divergenceCamps, outlier: store.outlierName) },
+                             onExportImage: { copy in exportImage(title: "DIVERGENCE", text: store.divergenceText, copy: copy) },
+                             onGenerate: { runRound { await store.runDivergence() } })
+        case .synthesis:
+            deliberationView(title: "SYNTHESIS",
+                             info: synthesisInfo,
+                             text: store.synthesisText,
+                             loading: store.deliberationBusy && store.synthesisText == nil,
+                             canGenerate: store.canSynthesize,
+                             error: store.synthesisError,
+                             disabledReason: deliberationDisabledReason,
+                             onExportImage: { copy in exportImage(title: "SYNTHESIS", text: store.synthesisText, copy: copy) },
+                             onGenerate: { runRound { await store.runSynthesis() } })
+        case .dissent:
+            dissentView
+        case .debate:
+            debateView
         }
     }
-
-    /// Assign a provider to a seat, warning first if the provider is already used elsewhere.
-    private func pickProvider(_ provider: LLMProvider, for seat: Seat) {
-        Task { await store.refreshModels(for: provider) }   // pull this provider's real model list
-        if store.providerInUse(provider, excluding: seat.id) {
-            pendingPick = PendingPick(provider: provider, seatID: seat.id)
-        } else {
-            store.setProvider(provider, seatID: seat.id)
-        }
-    }
-
-    private func panelFailure(_ id: Int) -> String? {
-        guard store.isViewingLatest, case .failed(let m) = store.status[id] ?? .idle else { return nil }
-        return m
-    }
-
-    /// Navigate between rounds; shows which round (and its question) you're viewing.
-    private var roundNavigator: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                Button { store.prevRound() } label: {
-                    Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(store.canGoPrevRound ? Blue.ink : Blue.dim)
-                        .frame(width: 28, height: 26)
-                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Blue.glassStroke.opacity(store.canGoPrevRound ? 1 : 0.4), lineWidth: 1))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).disabled(!store.canGoPrevRound)
-                .accessibilityLabel("Previous round")
-
-                Button { store.nextRound() } label: {
-                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(store.canGoNextRound ? Blue.ink : Blue.dim)
-                        .frame(width: 28, height: 26)
-                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Blue.glassStroke.opacity(store.canGoNextRound ? 1 : 0.4), lineWidth: 1))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).disabled(!store.canGoNextRound)
-                .accessibilityLabel("Next round")
-            }
-
-            Text("ROUND \(store.viewingRound + 1) / \(store.roundCount)")
-                .font(Blue.mono(10, .bold)).tracking(1).foregroundStyle(Blue.ink)
-            if store.divergenceText?.isEmpty == false { roundTag("DIV").help("This round has a divergence") }
-            if store.synthesisText?.isEmpty == false { roundTag("SYN").help("This round has a synthesis") }
-            Text(store.viewedQuestion)
-                .font(Blue.mono(10)).foregroundStyle(Blue.sub).lineLimit(1).truncationMode(.tail)
-            Spacer()
-            exportMenu.offset(y: layout.exportY)   // EXPORT can be nudged independently
-        }
-        // offset (not padding) so moving this row never pushes the panels — they stay put.
-        .offset(y: layout.roundBarTop)
-    }
-
-    /// A quiet outlined chip marking that the viewed round already has this artifact (DIV / SYN).
-    private func roundTag(_ s: String) -> some View {
-        Text(s).font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.ink)
-            .padding(.horizontal, 7).padding(.vertical, 2.5)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Blue.glassStroke, lineWidth: 1))
-    }
-
-    /// Full-width, calm reading view for the VIEWED round's cross-model artifact.
-    /// Shows the stored artifact if present (never auto-regenerates); offers an explicit
-    /// GENERATE for rounds that don't have one yet, and a REGENERATE in the header.
-    private let dissentInfo = "The advisor whose answer diverged most from the rest, surfaced on its own. The majority can be confidently wrong together — this is the take worth a second look. You decide."
 
     /// "Minority report": isolates the outlier advisor's full answer with a judge-it-yourself frame.
     private var dissentView: some View {
@@ -1172,8 +1186,6 @@ struct ContentView: View {
             }
         }
     }
-
-    private let debateInfo = "One optional rebuttal round. Each advisor sees where the council diverged and either revises its answer or holds — and says why. Capped at one round, so cost stays bounded. The point isn't to force consensus; it's to see which positions survive scrutiny."
 
     /// Bounded debate: a single rebuttal round. A cost-gated run button, then each advisor's
     /// revised-or-held take with its original answer tucked underneath, so you can see what moved.
@@ -1247,136 +1259,6 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-    }
-
-    /// Rough cost note: the rebuttal re-asks every answered seat once, so ≈ one more answer round.
-    private var rebuttalCostNote: String {
-        let n = store.seats.filter { store.viewedAnswer($0.id) != nil }.count
-        return "Runs \(n) advisor\(n == 1 ? "" : "s") once more · ≈ the cost of one answer round"
-    }
-
-    /// One advisor's rebuttal — its final take up top, the original answer collapsed underneath.
-    private func debateCard(seat: Seat, rebuttal: String, original: String?) -> some View {
-        let name = (store.viewedAnswerProvider(seat.id) ?? seat.provider?.panelName ?? "—").uppercased()
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text(name).font(Blue.mono(11, .bold)).tracking(1).foregroundStyle(Blue.ink)
-                Text("FINAL TAKE").font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.sub)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .overlay(Capsule().strokeBorder(Blue.glassStroke, lineWidth: 1))
-                Spacer()
-            }
-            MarkdownView(text: rebuttal, baseSize: 14).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let original, !original.isEmpty {
-                DisclosureGroup {
-                    MarkdownView(text: original, baseSize: 12).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 6)
-                } label: {
-                    Text("EARLIER ANSWER").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.dim)
-                }
-                .padding(.top, 4)
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
-    }
-
-    private let journalInfo = "A private log of the decisions your councils informed. Record what you actually chose, then revisit to note how it played out — so over time you can see whether the council's read held up. Stored only on this Mac, never uploaded."
-
-    /// Decision journal: the current council's decision up top (to log), then past decisions with
-    /// their outcomes. Closes the loop — a council proves its worth in the decisions it shaped.
-    private var journalScreen: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
-                        Text("DECISION JOURNAL").font(Blue.mono(17, .bold)).tracking(2).foregroundStyle(Blue.ink)
-                        InfoDot(text: journalInfo)
-                    }
-                    Text("What you decided after the council — and how it turned out. The council earns its keep in your decisions, not its answers.")
-                        .font(Blue.body(13)).foregroundStyle(Blue.sub).fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.bottom, 2)
-
-                if store.hasSession, let cur = store.sessions.first(where: { $0.id == store.currentSession }) {
-                    JournalEntryCard(session: cur, isCurrent: true,
-                                     onSaveDecision: { store.recordDecision($0, for: cur.id) },
-                                     onSaveOutcome: { store.recordOutcome($0, for: cur.id) })
-                        // Re-key the card to the session: without this, switching sessions reuses the
-                        // card's @State (draft text + edit mode) from the PREVIOUS session.
-                        .id(cur.id)
-                }
-
-                let past = store.journal.filter { $0.id != store.currentSession }
-                if !past.isEmpty {
-                    Text("PAST DECISIONS").font(Blue.mono(10, .bold)).tracking(1.5).foregroundStyle(Blue.dim)
-                        .padding(.top, 6)
-                    ForEach(past) { s in
-                        JournalEntryCard(session: s, isCurrent: false,
-                                         onSaveDecision: { store.recordDecision($0, for: s.id) },
-                                         onSaveOutcome: { store.recordOutcome($0, for: s.id) })
-                    }
-                }
-
-                if !store.hasSession && past.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "book.closed").font(.system(size: 28, weight: .light)).foregroundStyle(Blue.dim)
-                        Text("No decisions logged yet.").font(Blue.body(14)).italic().foregroundStyle(Blue.sub)
-                        Text("After a council answers, come back and record what you chose.").font(Blue.mono(11)).foregroundStyle(Blue.dim)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 48)
-                }
-            }
-            .frame(maxWidth: 760).frame(maxWidth: .infinity, alignment: .leading)
-            .padding(28)
-        }
-    }
-
-    /// The analyst's structured read of a round, shown as a band atop the Divergence view.
-    struct DivergenceVerdict { let divergence: Int; let camps: Int?; let outlier: String? }
-
-    /// Score band: how far apart the council landed (high = more disagreement = the signal), how
-    /// many camps, and the outlier — plus the honest caveat that this is agreement, not truth.
-    @ViewBuilder private func verdictBand(_ v: DivergenceVerdict) -> some View {
-        let hot = v.divergence >= 50
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text("\(v.divergence)").font(Blue.mono(32, .bold)).foregroundStyle(hot ? Blue.accent : Blue.ink)
-                    Text("/100").font(Blue.mono(11)).foregroundStyle(Blue.dim)
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("DIVERGENCE").font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.sub)
-                    Text("how far apart the council landed").font(Blue.mono(9)).foregroundStyle(Blue.dim)
-                }
-                Spacer()
-                if let c = v.camps { verdictStat("\(c)", "CAMPS") }
-                if let o = v.outlier, !o.isEmpty { verdictStat(o.uppercased(), "OUTLIER") }
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Blue.glassStroke).frame(height: 6)
-                    Capsule().fill(hot ? Blue.accent : Blue.sub)
-                        .frame(width: max(6, geo.size.width * Double(v.divergence) / 100), height: 6)
-                }
-            }
-            .frame(height: 6)
-            Text("measures agreement, not correctness — models can share the same blind spot.")
-                .font(Blue.mono(9)).foregroundStyle(Blue.dim)
-        }
-        .padding(.horizontal, 28).padding(.vertical, 16)
-        .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
-    }
-
-    private func verdictStat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text(value).font(Blue.mono(13, .bold)).foregroundStyle(Blue.ink).lineLimit(1)
-            Text(label).font(Blue.mono(8, .bold)).tracking(1.5).foregroundStyle(Blue.sub)
         }
     }
 
@@ -1488,8 +1370,6 @@ struct ContentView: View {
         .glassPanel(corner: 22)
     }
 
-    private let peerReviewInfo = "Each advisor critiques the others' answers, shown anonymized so there's no brand bias — it surfaces the weak spots the council finds in each other's reasoning."
-
     private var peerReviewGenerating: Bool {
         store.deliberationBusy && store.generatingRound == store.viewingRound
     }
@@ -1576,6 +1456,294 @@ struct ContentView: View {
         .glassPanel(corner: 22)
     }
 
+    /// Divergence/Synthesis can be viewed if already generated, or run once ≥2 advisors answered.
+    private var divergenceAvailable: Bool { store.canSynthesize || store.divergenceText != nil }
+    private var synthesisAvailable: Bool { store.canSynthesize || store.synthesisText != nil }
+
+    /// Why GENERATE is disabled — distinguishes "busy elsewhere" from "needs ≥2 answers".
+    private var deliberationDisabledReason: String {
+        store.isWorking ? "A generation is in progress — wait for it to finish."
+                        : "Answer ≥2 advisors in this round first."
+    }
+
+
+    /// A loaded round with answers but no analysis yet (older sessions, or a stopped pipeline) —
+    /// one quiet way to run it, since the stage nav is gone.
+    private var showRunAnalysis: Bool {
+        store.canSynthesize && !store.hasPeerReviewForViewedRound
+            && store.divergenceText == nil && store.synthesisText == nil
+            && store.pipelineStage == nil
+    }
+
+    private var panelGrid: some View {
+        // Each panel is locked to exactly one-third of the available width. Without this, a seat
+        // whose content has a wide intrinsic size (the model picker) would stretch its column and
+        // push the whole window wider — so columns must never size to their content.
+        GeometryReader { geo in
+            let gap: CGFloat = layout.panelGap
+            let colWidth = max(0, (geo.size.width - gap * 2) / 3)   // 2 gaps
+            HStack(alignment: .top, spacing: gap) {
+                ForEach(store.seats) { seat in
+                    let hovered = hoveredSeat == seat.id
+
+                    AdvisorPanel(seat: seat,
+                                 answeredProvider: store.viewedAnswerProvider(seat.id),
+                                 answer: store.viewedAnswer(seat.id),
+                                 loading: store.generatingRound == store.viewingRound && store.status[seat.id] == .loading,
+                                 failedMessage: panelFailure(seat.id),
+                                 connected: connected(seat),
+                                 canRegenerate: store.isViewingLatest,
+                                 isAdversary: store.devilsAdvocateSeatID == seat.id,
+                                 onValidateKey: { k in
+                                     let err = await store.validateAndSaveKey(k, for: seat)
+                                     if err == nil, let p = seat.provider { await store.refreshModels(for: p) }
+                                     return err
+                                 },
+                                 onSetModel: { store.setModel($0, seatID: seat.id) },
+                                 onPickProvider: { pickProvider($0, for: seat) },
+                                 onResetSeat: { store.clearProvider(seatID: seat.id) },
+                                 onRegenerate: { runRound { await store.regenerate(seatID: seat.id) } },
+                                 availableModels: seat.provider.flatMap { store.providerModels[$0] } ?? [])
+                        .frame(width: colWidth, height: geo.size.height)   // all three equal height
+                        .glassPanel(corner: layout.panelCorner, strokeOpacity: hovered ? 2.2 : 1)
+                        .contentShape(Rectangle())   // hover only registers over the panel's own rect
+                        .onHover { hoveredSeat = $0 ? seat.id : (hoveredSeat == seat.id ? nil : hoveredSeat) }
+                        .id(seat.id)   // bind the panel's @State (begun/justPicked) to its seat
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Fetch only lists we don't have yet — this view re-appears on every canvas switch, and
+        // key-save / provider-pick / test-connection already refresh on change.
+        .task { for p in Set(store.seats.compactMap(\.provider)) where store.providerModels[p] == nil { await store.refreshModels(for: p) } }
+        .alert("Same model on two seats?",
+               isPresented: Binding(get: { pendingPick != nil }, set: { if !$0 { pendingPick = nil } }),
+               presenting: pendingPick) { pick in
+            Button("Continue") { store.setProvider(pick.provider, seatID: pick.seatID); pendingPick = nil }
+            Button("Cancel", role: .cancel) { pendingPick = nil }
+        } message: { pick in
+            Text("\(pick.provider.panelName) is already on another seat. Running it twice spends extra tokens and usually reduces divergence.")
+        }
+    }
+
+    /// Assign a provider to a seat, warning first if the provider is already used elsewhere.
+    private func pickProvider(_ provider: LLMProvider, for seat: Seat) {
+        Task { await store.refreshModels(for: provider) }   // pull this provider's real model list
+        if store.providerInUse(provider, excluding: seat.id) {
+            pendingPick = PendingPick(provider: provider, seatID: seat.id)
+        } else {
+            store.setProvider(provider, seatID: seat.id)
+        }
+    }
+
+    private func panelFailure(_ id: Int) -> String? {
+        guard store.isViewingLatest, case .failed(let m) = store.status[id] ?? .idle else { return nil }
+        return m
+    }
+
+    /// Navigate between rounds; shows which round (and its question) you're viewing.
+    private var roundNavigator: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 6) {
+                Button { store.prevRound() } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(store.canGoPrevRound ? Blue.ink : Blue.dim)
+                        .frame(width: 28, height: 26)
+                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Blue.glassStroke.opacity(store.canGoPrevRound ? 1 : 0.4), lineWidth: 1))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(!store.canGoPrevRound)
+                .accessibilityLabel("Previous round")
+
+                Button { store.nextRound() } label: {
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(store.canGoNextRound ? Blue.ink : Blue.dim)
+                        .frame(width: 28, height: 26)
+                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Blue.glassStroke.opacity(store.canGoNextRound ? 1 : 0.4), lineWidth: 1))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(!store.canGoNextRound)
+                .accessibilityLabel("Next round")
+            }
+
+            Text("ROUND \(store.viewingRound + 1) / \(store.roundCount)")
+                .font(Blue.mono(10, .bold)).tracking(1).foregroundStyle(Blue.ink)
+            // One chip per existing stage — the old left-nav's speed without a second nav paradigm.
+            if store.hasPeerReviewForViewedRound { roundTag("PR", target: isClassic ? nil : "stage.pr").help("Peer review exists") }
+            if store.divergenceText?.isEmpty == false { roundTag("DIV", target: isClassic ? nil : "stage.div").help("Divergence exists") }
+            if store.hasRebuttalForViewedRound { roundTag("DEB", target: isClassic ? nil : "stage.debate").help("Debate exists") }
+            if store.synthesisText?.isEmpty == false { roundTag("SYN", target: isClassic ? nil : "stage.syn").help("Synthesis exists") }
+            if store.hasDissent { roundTag("DIS", target: isClassic ? nil : "stage.dissent").help("Dissent exists") }
+            Text(store.viewedQuestion)
+                .font(Blue.mono(10)).foregroundStyle(Blue.sub).lineLimit(1).truncationMode(.tail)
+            Spacer()
+            exportMenu.offset(y: layout.exportY)   // EXPORT can be nudged independently
+        }
+        // offset (not padding) so moving this row never pushes the panels — they stay put.
+        .offset(y: layout.roundBarTop)
+    }
+
+    /// A quiet outlined chip marking that the viewed round already has this artifact (DIV / SYN).
+    /// With a target it doubles as a jump-to-stage button in the flow.
+    @ViewBuilder private func roundTag(_ s: String, target: String? = nil) -> some View {
+        let chip = Text(s).font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.ink)
+            .padding(.horizontal, 7).padding(.vertical, 2.5)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Blue.glassStroke, lineWidth: 1))
+        if let target {
+            Button {
+                if target == "stage.pr" { peerReviewExpanded = true }   // jumping to a collapsed card opens it
+                withAnimation(Motion.view) { flowProxy?.scrollTo(target, anchor: .top) }
+            } label: {
+                chip.contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Jump to \(s) stage")
+        } else {
+            chip
+        }
+    }
+
+    private let dissentInfo = "The advisor whose answer diverged most from the rest, surfaced on its own. The majority can be confidently wrong together — this is the take worth a second look. You decide."
+
+    private let debateInfo = "One optional rebuttal round. Each advisor sees where the council diverged and either revises its answer or holds — and says why. Capped at one round, so cost stays bounded. The point isn't to force consensus; it's to see which positions survive scrutiny."
+
+    /// Rough cost note: the rebuttal re-asks every answered seat once, so ≈ one more answer round.
+    private var rebuttalCostNote: String {
+        let n = store.seats.filter { store.viewedAnswer($0.id) != nil }.count
+        return "Runs \(n) advisor\(n == 1 ? "" : "s") once more · ≈ the cost of one answer round"
+    }
+
+    /// One advisor's rebuttal — its final take up top, the original answer collapsed underneath.
+    private func debateCard(seat: Seat, rebuttal: String, original: String?) -> some View {
+        let name = (store.viewedAnswerProvider(seat.id) ?? seat.provider?.panelName ?? "—").uppercased()
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(name).font(Blue.mono(11, .bold)).tracking(1).foregroundStyle(Blue.ink)
+                Text("FINAL TAKE").font(Blue.mono(8, .bold)).tracking(1).foregroundStyle(Blue.sub)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .overlay(Capsule().strokeBorder(Blue.glassStroke, lineWidth: 1))
+                Spacer()
+            }
+            MarkdownView(text: rebuttal, baseSize: 14).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let original, !original.isEmpty {
+                DisclosureGroup {
+                    MarkdownView(text: original, baseSize: 12).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 6)
+                } label: {
+                    Text("EARLIER ANSWER").font(Blue.mono(9, .bold)).tracking(1).foregroundStyle(Blue.dim)
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+    }
+
+    private let journalInfo = "A private log of the decisions your councils informed. Record what you actually chose, then revisit to note how it played out — so over time you can see whether the council's read held up. Stored only on this Mac, never uploaded."
+
+    /// Decision journal: the current council's decision up top (to log), then past decisions with
+    /// their outcomes. Closes the loop — a council proves its worth in the decisions it shaped.
+    private var journalScreen: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Text("DECISION JOURNAL").font(Blue.mono(17, .bold)).tracking(2).foregroundStyle(Blue.ink)
+                        InfoDot(text: journalInfo)
+                    }
+                    Text("What you decided after the council — and how it turned out. The council earns its keep in your decisions, not its answers.")
+                        .font(Blue.body(13)).foregroundStyle(Blue.sub).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.bottom, 2)
+
+                if store.hasSession, let cur = store.sessions.first(where: { $0.id == store.currentSession }) {
+                    JournalEntryCard(session: cur, isCurrent: true,
+                                     onSaveDecision: { store.recordDecision($0, for: cur.id) },
+                                     onSaveOutcome: { store.recordOutcome($0, for: cur.id) })
+                        // Re-key the card to the session: without this, switching sessions reuses the
+                        // card's @State (draft text + edit mode) from the PREVIOUS session.
+                        .id(cur.id)
+                }
+
+                let past = store.journal.filter { $0.id != store.currentSession }
+                if !past.isEmpty {
+                    Text("PAST DECISIONS").font(Blue.mono(10, .bold)).tracking(1.5).foregroundStyle(Blue.dim)
+                        .padding(.top, 6)
+                    ForEach(past) { s in
+                        JournalEntryCard(session: s, isCurrent: false,
+                                         onSaveDecision: { store.recordDecision($0, for: s.id) },
+                                         onSaveOutcome: { store.recordOutcome($0, for: s.id) })
+                    }
+                }
+
+                if !store.hasSession && past.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "book.closed").font(.system(size: 28, weight: .light)).foregroundStyle(Blue.dim)
+                        Text("No decisions logged yet.").font(Blue.body(14)).italic().foregroundStyle(Blue.sub)
+                        Text("After a council answers, come back and record what you chose.").font(Blue.body(12)).foregroundStyle(Blue.dim)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 48)
+                }
+            }
+            .frame(maxWidth: 760).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(28)
+        }
+    }
+
+    /// The analyst's structured read of a round, shown as a band atop the Divergence view.
+    struct DivergenceVerdict { let divergence: Int; let camps: Int?; let outlier: String? }
+
+    /// Score band: how far apart the council landed (high = more disagreement = the signal), how
+    /// many camps, and the outlier — plus the honest caveat that this is agreement, not truth.
+    @ViewBuilder private func verdictBand(_ v: DivergenceVerdict) -> some View {
+        let hot = v.divergence >= 50
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text("\(v.divergence)").font(Blue.mono(32, .bold)).foregroundStyle(hot ? Blue.accent : Blue.ink)
+                    Text("/100").font(Blue.mono(11)).foregroundStyle(Blue.dim)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("DIVERGENCE").font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.sub)
+                    Text("how far apart the council landed").font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                }
+                Spacer()
+                if let c = v.camps { verdictStat("\(c)", "CAMPS") }
+                if let o = v.outlier, !o.isEmpty { verdictStat(o.uppercased(), "OUTLIER") }
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Blue.glassStroke).frame(height: 6)
+                    Capsule().fill(hot ? Blue.accent : Blue.sub)
+                        .frame(width: max(6, geo.size.width * Double(v.divergence) / 100), height: 6)
+                }
+            }
+            .frame(height: 6)
+            Text("measures agreement, not correctness — models can share the same blind spot.")
+                .font(Blue.body(11)).foregroundStyle(Blue.dim)
+        }
+        .padding(.horizontal, 28).padding(.vertical, 16)
+        .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
+    }
+
+    private func verdictStat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(value).font(Blue.mono(13, .bold)).foregroundStyle(Blue.ink).lineLimit(1)
+            Text(label).font(Blue.mono(8, .bold)).tracking(1.5).foregroundStyle(Blue.sub)
+        }
+    }
+
+    private let peerReviewInfo = "Each advisor critiques the others' answers, shown anonymized so there's no brand bias — it surfaces the weak spots the council finds in each other's reasoning."
+
     private func peerReviewCard(seat: Seat, review: String) -> some View {
         let name = (store.viewedAnswerProvider(seat.id) ?? seat.provider?.panelName ?? "—").uppercased()
         return VStack(alignment: .leading, spacing: 10) {
@@ -1602,14 +1770,264 @@ struct ContentView: View {
         return store.hasKey(seat)
     }
 
-    /// Divergence/Synthesis can be viewed if already generated, or run once ≥2 advisors answered.
-    private var divergenceAvailable: Bool { store.canSynthesize || store.divergenceText != nil }
-    private var synthesisAvailable: Bool { store.canSynthesize || store.synthesisText != nil }
+    // MARK: Flow stage cards
 
-    /// Why GENERATE is disabled — distinguishes "busy elsewhere" from "needs ≥2 answers".
-    private var deliberationDisabledReason: String {
-        store.isWorking ? "A generation is in progress — wait for it to finish."
-                        : "Answer ≥2 advisors in this round first."
+    private let divergenceInfo = "Where the council disagrees. It skips what everyone already shares and pulls out the real fault lines — what they split on, and why."
+    private let synthesisInfo = "The council's answers distilled into one — the common ground plus the strongest individual points, for a single, decision-ready read."
+
+    /// Shared header for a stage card in the flow: title + info dot + optional subtitle/actions.
+    @ViewBuilder private func stageHeader(_ title: String, info: String, subtitle: String? = nil,
+                                          showVia: Bool = false,
+                                          onRegenerate: (() -> Void)? = nil, canRegenerate: Bool = true,
+                                          onExportImage: ((Bool) -> Void)? = nil) -> some View {
+        HStack(spacing: 10) {
+            Text(title).font(Blue.mono(13, .bold)).tracking(2).foregroundStyle(Blue.ink)
+            InfoDot(text: info)
+            if let subtitle {
+                Text("· \(subtitle)").font(Blue.mono(9)).foregroundStyle(Blue.sub)
+            }
+            if showVia, let n = store.synthesizerName {
+                Text("· via \(n.uppercased())").font(Blue.mono(9)).foregroundStyle(Blue.sub)
+            }
+            Spacer()
+            if let onRegenerate {
+                Button(action: onRegenerate) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .bold))
+                        Text("REGENERATE").font(Blue.mono(9, .bold)).tracking(1)
+                    }
+                    .foregroundStyle(Blue.sub).padding(.horizontal, 8).padding(.vertical, 5)
+                    .glassHover(corner: 8).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(!canRegenerate).help("Regenerate for this round")
+            }
+            if let onExportImage {
+                Menu {
+                    Button("Save image…") { onExportImage(false) }
+                    Button("Copy image") { onExportImage(true) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "photo").font(.system(size: 9, weight: .bold))
+                        Text("IMAGE").font(Blue.mono(9, .bold)).tracking(1)
+                    }
+                    .foregroundStyle(Blue.sub).padding(.horizontal, 8).padding(.vertical, 5)
+                    .glassHover(corner: 8).contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Export this as a shareable image")
+                .accessibilityLabel("Export as image")
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .overlay(alignment: .bottom) { Rectangle().fill(Blue.glassStroke).frame(height: 1) }
+    }
+
+    /// Quiet inline hint for the stage the pipeline is generating right now.
+    private func stageProgressCard(_ title: String) -> some View {
+        HStack(spacing: 14) {
+            Text(title).font(Blue.mono(10, .bold)).tracking(2).foregroundStyle(Blue.sub)
+            FillBar(once: false).frame(maxWidth: 160)
+            Spacer()
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .glassPanel(corner: 22)
+        .transition(.opacity)
+    }
+
+    private var runAnalysisCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ANALYSIS").font(Blue.mono(10, .bold)).tracking(1.5).foregroundStyle(Blue.ink)
+                Text("Peer review → divergence → synthesis for this round.")
+                    .font(Blue.body(10)).foregroundStyle(Blue.dim)
+            }
+            Spacer()
+            Button { runRound { await store.runAutoPipeline() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill").font(.system(size: 9, weight: .bold))
+                    Text("RUN").font(Blue.mono(10, .bold)).tracking(1)
+                }
+                .foregroundStyle(Blue.paper)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Blue.ink, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).disabled(store.isWorking)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 13)
+        .glassPanel(corner: 22)
+    }
+
+    /// Peer review stage card — collapsed by default; one tap reveals the full critiques.
+    private var peerReviewFlowCard: some View {
+        let count = store.seats.filter { store.viewedPeerReview($0.id)?.isEmpty == false }.count
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Button { withAnimation(Motion.reveal) { peerReviewExpanded.toggle() } } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Blue.sub)
+                            .rotationEffect(.degrees(peerReviewExpanded ? 90 : 0))
+                        Text("PEER REVIEW").font(Blue.mono(13, .bold)).tracking(2).foregroundStyle(Blue.ink)
+                        Text("· \(count) critique\(count == 1 ? "" : "s")").font(Blue.mono(9)).foregroundStyle(Blue.sub)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(peerReviewExpanded ? "Collapse peer review" : "Expand peer review")
+                InfoDot(text: peerReviewInfo)
+                Spacer()
+                if peerReviewExpanded {
+                    Button { runRound { await store.peerReview() } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .bold))
+                            Text("REGENERATE").font(Blue.mono(9, .bold)).tracking(1)
+                        }
+                        .foregroundStyle(Blue.sub).padding(.horizontal, 8).padding(.vertical, 5)
+                        .glassHover(corner: 8).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).disabled(!store.canPeerReview).help("Re-run peer review for this round")
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 14)
+
+            if peerReviewExpanded {
+                Rectangle().fill(Blue.glassStroke).frame(height: 1)
+                VStack(spacing: 14) {
+                    ForEach(store.seats) { seat in
+                        if let review = store.viewedPeerReview(seat.id), !review.isEmpty {
+                            peerReviewCard(seat: seat, review: review)
+                        }
+                    }
+                }
+                .frame(maxWidth: 820, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+                .transition(.opacity)
+            }
+        }
+        .glassPanel(corner: 22)
+    }
+
+    private var divergenceFlowCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            stageHeader("DIVERGENCE", info: divergenceInfo, showVia: true,
+                        onRegenerate: { runRound { await store.runDivergence() } },
+                        canRegenerate: store.canSynthesize,
+                        onExportImage: { copy in exportImage(title: "DIVERGENCE", text: store.divergenceText, copy: copy) })
+            if let v = store.agreementScore.map({ DivergenceVerdict(divergence: 100 - $0, camps: store.divergenceCamps, outlier: store.outlierName) }) {
+                verdictBand(v)
+            }
+            if let error = store.divergenceError {
+                Text("⚠︎ \(error)").font(Blue.mono(9)).foregroundStyle(Blue.red)
+                    .padding(.horizontal, 24).padding(.top, 10)
+            }
+            if let t = store.divergenceText {
+                MarkdownView(text: t, baseSize: 15).textSelection(.enabled)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+            }
+        }
+        .glassPanel(corner: 22)
+    }
+
+    private var synthesisFlowCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            stageHeader("SYNTHESIS", info: synthesisInfo, showVia: true,
+                        onRegenerate: { runRound { await store.runSynthesis() } },
+                        canRegenerate: store.canSynthesize,
+                        onExportImage: { copy in exportImage(title: "SYNTHESIS", text: store.synthesisText, copy: copy) })
+            if let error = store.synthesisError {
+                Text("⚠︎ \(error)").font(Blue.mono(9)).foregroundStyle(Blue.red)
+                    .padding(.horizontal, 24).padding(.top, 10)
+            }
+            if let t = store.synthesisText {
+                MarkdownView(text: t, baseSize: 15).textSelection(.enabled)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+            }
+        }
+        .glassPanel(corner: 22)
+    }
+
+    /// Debate stage card — each advisor's final take, original answer tucked underneath.
+    private var debateFlowCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            stageHeader("DEBATE", info: debateInfo, subtitle: "final takes — who moved, who held")
+            VStack(spacing: 14) {
+                ForEach(store.seats) { seat in
+                    if let rebuttal = store.viewedRebuttal(seat.id) {
+                        debateCard(seat: seat, rebuttal: rebuttal, original: store.viewedAnswer(seat.id))
+                    }
+                }
+            }
+            .frame(maxWidth: 820, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
+        .glassPanel(corner: 22)
+    }
+
+    /// The optional debate, offered quietly in its pipeline slot — one bounded round, user opts in.
+    private var debateOfferCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 14, weight: .light)).foregroundStyle(Blue.sub)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("DEBATE").font(Blue.mono(10, .bold)).tracking(1.5).foregroundStyle(Blue.ink)
+                    Text("· optional").font(Blue.mono(9)).foregroundStyle(Blue.dim)
+                    InfoDot(text: debateInfo)
+                }
+                Text("One rebuttal round — each advisor revises or holds. \(rebuttalCostNote)")
+                    .font(Blue.body(10)).foregroundStyle(Blue.dim)
+            }
+            Spacer()
+            Button { runRound { await store.runRebuttal() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill").font(.system(size: 9, weight: .bold))
+                    Text("RUN").font(Blue.mono(10, .bold)).tracking(1)
+                }
+                .foregroundStyle(Blue.paper)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Blue.ink, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).disabled(store.isWorking)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 13)
+        .glassPanel(corner: 22)
+    }
+
+    /// "Minority report" stage card: the outlier advisor's full answer, judge-it-yourself framing.
+    private var dissentFlowCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            stageHeader("DISSENT", info: dissentInfo)
+            if let name = store.outlierName, let answer = store.outlierAnswer {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.bubble.fill").font(.system(size: 13)).foregroundStyle(Blue.accent)
+                            Text("\(name.uppercased()) STOOD APART").font(Blue.mono(13, .bold)).tracking(1).foregroundStyle(Blue.ink)
+                        }
+                        Text("The majority isn't automatically right — advisors can share the same blind spot. Here's the dissenting take; judge it for yourself.")
+                            .font(Blue.body(13)).foregroundStyle(Blue.sub)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+
+                    MarkdownView(text: answer, baseSize: 15).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(24)
+            }
+        }
+        .glassPanel(corner: 22)
     }
 
     private var directiveInput: some View {
@@ -1673,10 +2091,11 @@ struct ContentView: View {
                 Button(action: isBusy ? stop : ask) {
                     Image(systemName: isBusy ? "stop.fill" : "arrow.up")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(isBusy ? Blue.red : (canAsk ? Blue.ink : Blue.dim))
+                        .foregroundStyle(isBusy ? Blue.red : (canAsk ? Blue.paper : Blue.dim))
                         .frame(width: 36, height: 36)
                         .background(.ultraThinMaterial, in: Circle())
-                        .background(Blue.glassBright, in: Circle())
+                        // THE primary action of the canvas: ink-filled when ready, quiet glass otherwise.
+                        .background(canAsk && !isBusy ? AnyShapeStyle(Blue.ink) : AnyShapeStyle(Blue.glassBright), in: Circle())
                         .overlay(Circle().strokeBorder(Blue.glassStroke, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
@@ -1784,12 +2203,15 @@ struct ContentView: View {
         let image: ImageAttachment? = pickedImage
             .flatMap(pngData(from:))
             .map { ImageAttachment(data: $0, mediaType: "image/png") }
-        canvasMode = .panels
         isAsking = true
         query = ""
         pickedImage = nil
+        if isClassic { canvasMode = .panels }
+        else { withAnimation(Motion.view) { flowProxy?.scrollTo("flow.panels", anchor: .top) } }
         runningTask = Task {
             await store.ask(q, image: image)
+            // Analysis is OPT-IN: once ≥2 answers land, the flow offers a single RUN — nothing
+            // spends tokens without a click.
             isAsking = false
             runningTask = nil
         }
@@ -1947,10 +2369,13 @@ private struct JournalEntryCard: View {
 
     private func saveButton(_ label: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label).font(Blue.mono(10, .bold)).tracking(1).foregroundStyle(Blue.ink)
+            Text(label).font(Blue.mono(10, .bold)).tracking(1)
+                .foregroundStyle(enabled ? Blue.paper : Blue.ink)
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                // The card's one primary action — filled when it can actually save.
+                .background(enabled ? AnyShapeStyle(Blue.ink) : AnyShapeStyle(Blue.glassFill),
+                            in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Blue.glassStroke, lineWidth: enabled ? 0 : 1))
         }
         .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.5)
     }
@@ -2758,6 +3183,8 @@ private struct SettingsSheet: View {
 
     /// Whether exported images carry the "made with Council" watermark. Default on (growth).
     @AppStorage("council.shareWatermark") private var shareWatermark = true
+    /// Session layout: "flow" (one page) or "classic" (stage screens in the sidebar).
+    @AppStorage("council.layout") private var layoutMode = "flow"
     /// Spend alert: notify once when all-time spend crosses this dollar threshold.
     @AppStorage("council.spendAlertOn") private var spendAlertOn = false
     @AppStorage("council.spendAlertAmt") private var spendAlertAmt = 10.0
@@ -2767,7 +3194,14 @@ private struct SettingsSheet: View {
     /// Local Ollama base URL — blank = localhost. Lets you point at Ollama on another machine.
     @AppStorage("council.ollamaHost") private var ollamaHost = ""
     @State private var ollamaTesting = false
-    @State private var ollamaTestResult: OllamaTestResult? = nil
+    @State private var ollamaTestResult: EndpointTestResult? = nil
+    /// Custom OpenAI-compatible endpoints (llama.cpp, LM Studio, vLLM, a second Ollama…), 2 slots.
+    @AppStorage("council.custom1.name") private var custom1Name = ""
+    @AppStorage("council.custom1.host") private var custom1Host = ""
+    @AppStorage("council.custom2.name") private var custom2Name = ""
+    @AppStorage("council.custom2.host") private var custom2Host = ""
+    @State private var customTesting: Int? = nil
+    @State private var customResults: [Int: EndpointTestResult] = [:]
     /// A council config staged for import, awaiting confirmation (it overwrites the live setup).
     @State private var pendingImport: CouncilConfig?
     /// A preset staged for "load" confirmation.
@@ -2879,8 +3313,8 @@ private struct SettingsSheet: View {
         }
     }
 
-    /// Status line under the Ollama endpoint test — neutral on success, amber if empty, red on failure.
-    @ViewBuilder private func ollamaResultLine(_ r: OllamaTestResult) -> some View {
+    /// Status line under an endpoint test — neutral on success, amber if empty, red on failure.
+    @ViewBuilder private func ollamaResultLine(_ r: EndpointTestResult) -> some View {
         let (icon, text, color): (String, String, Color) = {
             switch r {
             case .ok(let n) where n > 0:
@@ -2894,6 +3328,42 @@ private struct SettingsSheet: View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: icon).font(.system(size: 10)).foregroundStyle(color)
             Text(text).font(Blue.mono(10)).foregroundStyle(color).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// One custom-endpoint slot: short name + base URL + per-slot test with inline result.
+    @ViewBuilder private func customEndpointRow(slot: Int, name: Binding<String>, host: Binding<String>) -> some View {
+        let provider: LLMProvider = slot == 1 ? .custom1 : .custom2
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                TextField("Custom \(slot)", text: name)
+                    .textFieldStyle(.plain).font(Blue.mono(12)).foregroundStyle(Blue.ink)
+                    .padding(.vertical, 9).padding(.horizontal, 10)
+                    .frame(width: 120)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .help("Shown on the seat's panel")
+                TextField("http://192.168.1.20:8080", text: host)
+                    .textFieldStyle(.plain).font(Blue.mono(12)).foregroundStyle(Blue.ink)
+                    .padding(.vertical, 9).padding(.horizontal, 10)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .onChange(of: host.wrappedValue) { customResults[slot] = nil }
+                    .onSubmit { Task { await store.refreshModels(for: provider) } }
+                Button {
+                    customTesting = slot; customResults[slot] = nil
+                    Task { let r = await store.testEndpoint(for: provider); customTesting = nil; customResults[slot] = r }
+                } label: {
+                    Text(customTesting == slot ? "TESTING…" : "TEST").font(Blue.mono(9, .bold)).tracking(1)
+                        .foregroundStyle(Blue.ink)
+                        .padding(.horizontal, 10).padding(.vertical, 9)
+                        .background(Blue.glassFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(customTesting != nil || host.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityLabel("Test custom endpoint \(slot)")
+            }
+            if let r = customResults[slot] { ollamaResultLine(r) }
         }
     }
 
@@ -2911,7 +3381,7 @@ private struct SettingsSheet: View {
             HStack(spacing: 10) {
                 Button {
                     ollamaTesting = true; ollamaTestResult = nil
-                    Task { let r = await store.testOllamaConnection(); ollamaTesting = false; ollamaTestResult = r }
+                    Task { let r = await store.testEndpoint(for: .ollama); ollamaTesting = false; ollamaTestResult = r }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: ollamaTesting ? "ellipsis" : "bolt.horizontal").font(.system(size: 10, weight: .bold))
@@ -2932,6 +3402,13 @@ private struct SettingsSheet: View {
                 }
             }
             if let r = ollamaTestResult { ollamaResultLine(r) }
+        }
+        section("CUSTOM ENDPOINTS") {
+            Text("Any OpenAI-compatible server — llama.cpp, LM Studio, vLLM, or a second Ollama box. Set a URL and it joins the seat picker; TEST pulls its real model list.")
+                .font(Blue.body(11)).foregroundStyle(Blue.sub)
+                .fixedSize(horizontal: false, vertical: true)
+            customEndpointRow(slot: 1, name: $custom1Name, host: $custom1Host)
+            customEndpointRow(slot: 2, name: $custom2Name, host: $custom2Host)
         }
         section("PROVIDERS") {
             Text("Filled dot = a key is saved. Prices are per 1M tokens (input / output).")
@@ -3055,11 +3532,49 @@ private struct SettingsSheet: View {
     }
 
     @ViewBuilder private var appTab: some View {
+        section("LAYOUT") {
+            Text("How a session reads. Flow is one page — analysis appears beneath the answers. Classic keeps every stage as its own screen in the sidebar.")
+                .font(Blue.body(11)).foregroundStyle(Blue.sub)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 0) {
+                LayoutOption(label: "FLOW", icon: "rectangle.stack", value: "flow", layout: $layoutMode)
+                LayoutOption(label: "CLASSIC", icon: "sidebar.left", value: "classic", layout: $layoutMode)
+            }
+        }
         section("APPEARANCE") {
             HStack(spacing: 0) {
                 AppearanceOption(label: "LIGHT", value: "light", icon: "sun.max", appearance: $appearance)
                 AppearanceOption(label: "DARK", value: "dark", icon: "moon", appearance: $appearance)
             }
+        }
+        section("UPDATES") {
+            HStack(spacing: 8) {
+                Text("Version").font(Blue.body(12)).foregroundStyle(Blue.sub)
+                Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
+                    .font(Blue.mono(12, .bold)).foregroundStyle(Blue.ink)
+                    .textSelection(.enabled)
+                Spacer()
+            }
+            Toggle(isOn: Binding(
+                get: { Updater.controller.updater.automaticallyChecksForUpdates },
+                set: { Updater.controller.updater.automaticallyChecksForUpdates = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Check for updates automatically")
+                        .font(Blue.body(12)).foregroundStyle(Blue.ink)
+                    Text("New versions install in-app — no need to revisit GitHub.")
+                        .font(Blue.body(11)).foregroundStyle(Blue.dim)
+                }
+            }
+            .toggleStyle(.switch).tint(Blue.accent)
+            Button { Updater.controller.checkForUpdates(nil) } label: {
+                Text("CHECK FOR UPDATES").font(Blue.mono(10, .bold)).tracking(1)
+                    .foregroundStyle(Blue.ink)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Blue.glassBright, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Blue.glassStroke, lineWidth: 1))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         section("PERFORMANCE") {
             Toggle(isOn: $liteMode) {
@@ -3067,7 +3582,7 @@ private struct SettingsSheet: View {
                     Text("Reduce glass for performance")
                         .font(Blue.body(12)).foregroundStyle(Blue.ink)
                     Text("Uses a lighter frosted material instead of real Liquid Glass. Turn on if scrolling feels heavy on your Mac.")
-                        .font(Blue.mono(10)).foregroundStyle(Blue.dim)
+                        .font(Blue.body(11)).foregroundStyle(Blue.dim)
                 }
             }
             .toggleStyle(.switch).tint(Blue.accent)
@@ -3110,8 +3625,17 @@ private struct SettingsSheet: View {
                     Spacer()
                 }
                 Text("Estimated spend across all sessions (you pay providers directly).")
-                    .font(Blue.mono(10)).foregroundStyle(Blue.dim)
+                    .font(Blue.body(11)).foregroundStyle(Blue.dim)
             }
+        }
+        section("KEYBOARD SHORTCUTS") {
+            shortcutRow("\u{2318}N", "New directive")
+            shortcutRow("\u{2318}1 / \u{2318}2 / \u{2318}3", "Home / Roundtable / Journal")
+            shortcutRow("\u{2318}[ / \u{2318}]", "Previous / next round")
+            shortcutRow("\u{2318}E", "Copy session as markdown")
+            shortcutRow("\u{21E7}\u{2318}E", "Save decision memo")
+            shortcutRow("\u{2318},", "Settings")
+            shortcutRow("\u{21A9}", "Focus the composer / send")
         }
         section("CONVERSATION STORAGE") {
             Text("Stored on this Mac — no cloud, no server.")
@@ -3143,6 +3667,15 @@ private struct SettingsSheet: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func shortcutRow(_ keys: String, _ what: String) -> some View {
+        HStack(spacing: 10) {
+            Text(keys).font(Blue.mono(10, .bold)).foregroundStyle(Blue.ink)
+                .frame(width: 110, alignment: .leading)
+            Text(what).font(Blue.body(11)).foregroundStyle(Blue.sub)
+            Spacer()
+        }
     }
 
     @ViewBuilder private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
@@ -3303,6 +3836,38 @@ private struct SettingsTabRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isOver in withAnimation(Motion.quick) { hovered = isOver } }
+    }
+}
+
+/// One session-layout choice (Settings → App → Layout). Same visual language as the
+/// appearance picker — glow on hover, steady glow when selected.
+private struct LayoutOption: View {
+    let label: String
+    let icon: String
+    let value: String
+    @Binding var layout: String
+    @State private var hovered = false
+
+    var body: some View {
+        let on = layout == value
+        let lit = on || hovered
+        return Button {
+            withAnimation(Motion.view) { layout = value }
+        } label: {
+            VStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 22, weight: lit ? .bold : .light))
+                Text(label).font(Blue.mono(13, .bold)).tracking(3)
+            }
+            .foregroundStyle(lit ? Blue.ink : Blue.dim)
+            .shadow(color: lit ? Blue.ink.opacity(0.4) : .clear, radius: lit ? 12 : 0)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 26)
+            .contentShape(Rectangle())
+            .cursorGlow(selected: on)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(Motion.quick, value: hovered)
     }
 }
 

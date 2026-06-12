@@ -4,39 +4,44 @@ import AppKit
 import UserNotifications
 
 /// Per-seat live state (applies to the round currently being generated).
-enum SeatStatus: Equatable { case idle, loading, failed(String) }
+public enum SeatStatus: Equatable { case idle, loading, failed(String) }
 
-/// Result of a "test connection" probe against the Ollama endpoint (Settings → Models).
-enum OllamaTestResult: Equatable { case ok(Int); case failed(String) }
+/// Result of a "test connection" probe against a local/self-hosted endpoint (Settings → Models).
+public enum EndpointTestResult: Equatable { case ok(Int); case failed(String) }
 
 /// Central app state. A session is a list of `Round`s; each round keeps its own answers,
 /// peer reviews, divergence and synthesis. The user navigates rounds; nothing is wiped.
 @MainActor
 @Observable
-final class CouncilStore {
-    var seats: [Seat]
-    var status: [Int: SeatStatus] = [:]
+public final class CouncilStore {
+    public var seats: [Seat]
+    public var status: [Int: SeatStatus] = [:]
     /// All rounds in the current session, oldest → newest.
-    var rounds: [Round] = []
+    public var rounds: [Round] = []
     /// Which round the UI is showing (analyses + answers are read from this round).
-    var viewingRound = 0
+    public var viewingRound = 0
     /// True while a divergence/synthesis round is running.
-    var deliberationBusy = false
+    public var deliberationBusy = false
+    /// CLI `--no-save`: when false, finished sessions are not written to disk. Always true in the app.
+    public var persistenceEnabled = true
+    /// Human-readable stage the auto-pipeline is generating right now (nil = idle).
+    /// Drives the flow page's quiet inline progress hint.
+    public var pipelineStage: String?
     /// Which round index is currently generating answers/peer-reviews (nil = none). The panel
     /// spinner keys off this so it shows on the round actually working, not just the latest.
-    var generatingRound: Int?
+    public var generatingRound: Int?
     /// Transient (NEVER persisted) error from the last divergence / synthesis attempt. We never
     /// write an error string into a round's content — a failed network call must not become
     /// permanent "analysis" saved to disk. Shown briefly in the canvas, cleared on retry/nav.
-    var divergenceError: String?
-    var synthesisError: String?
+    public var divergenceError: String?
+    public var synthesisError: String?
     /// Bumped whenever a key is saved; refreshes the key cache so views re-evaluate `hasKey`.
-    var keyRevision = 0 { didSet { refreshKeyCache() } }
+    public var keyRevision = 0 { didSet { refreshKeyCache() } }
     /// Cached set of providers that currently have a key — so `hasKey`/`keyExists` never hit the
     /// Keychain from a view body (12 synchronous Keychain reads per render = the scroll jank).
     /// Rebuilt only when a key actually changes, not on every render.
     private(set) var keyCache: Set<LLMProvider> = []
-    func refreshKeyCache() {
+    public func refreshKeyCache() {
         var s: Set<LLMProvider> = []
         for p in LLMProvider.allCases where p.requiresAPIKey {
             if let k = (try? KeychainStore.read(account: p.keychainAccount)) ?? nil, !k.isEmpty { s.insert(p) }
@@ -48,16 +53,16 @@ final class CouncilStore {
     /// public catalogue (/models), and any keyed provider's accessible models (/models with the key).
     /// Drives the picker so it offers what the user can actually use; empty for a provider falls back
     /// to that provider's fixed suggestion list.
-    var providerModels: [LLMProvider: [String]] = [:]
+    public var providerModels: [LLMProvider: [String]] = [:]
 
-    func refreshModels(for provider: LLMProvider) async {
+    public func refreshModels(for provider: LLMProvider) async {
         guard let url = provider.modelsEndpoint else { return }
         var req = URLRequest(url: url)
         req.timeoutInterval = 6
-        // Ollama needs no auth; OpenRouter's list is public (send a key only if we have one); every
-        // other keyed provider needs its key to list the models that key can actually reach.
+        // Ollama + custom servers need no auth; OpenRouter's list is public (send a key only if we
+        // have one); every other keyed provider needs its key to list what it can actually reach.
         switch provider {
-        case .ollama:
+        case .ollama, .custom1, .custom2:
             break
         case .claude:
             guard let k = storedKey(for: provider) else { return }
@@ -79,21 +84,22 @@ final class CouncilStore {
         }
     }
 
-    /// Explicit "test connection" for the Ollama endpoint (Settings → Models). Unlike refreshModels,
-    /// it reports a result the UI can show, and on success seeds providerModels so the picker
-    /// immediately shows the server's real models instead of the pre-populated suggestions.
-    func testOllamaConnection() async -> OllamaTestResult {
-        guard let url = LLMProvider.ollama.modelsEndpoint else { return .failed("That endpoint isn't a valid URL.") }
+    /// Explicit "test connection" for a local/self-hosted endpoint (Ollama or a custom slot —
+    /// Settings → Models). Unlike refreshModels, it reports a result the UI can show, and on
+    /// success seeds providerModels so the picker immediately shows the server's real models.
+    public func testEndpoint(for provider: LLMProvider) async -> EndpointTestResult {
+        guard let url = provider.modelsEndpoint else { return .failed("Set a valid URL first.") }
         var req = URLRequest(url: url); req.timeoutInterval = 6
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse else { return .failed("No response from that address.") }
             guard http.statusCode == 200 else { return .failed("Reached it, but it returned HTTP \(http.statusCode).") }
             let ids = Self.parseModelList(data)
-            if !ids.isEmpty { providerModels[.ollama] = ids }
+            if !ids.isEmpty { providerModels[provider] = ids }
             return .ok(ids.count)
         } catch {
-            return .failed("Couldn't reach \(LLMProvider.ollamaHost) — is Ollama running and reachable from this Mac?")
+            let host = provider.customSlot.map(LLMProvider.customHost) ?? LLMProvider.ollamaHost
+            return .failed("Couldn't reach \(host) — is the server running and reachable from this Mac?")
         }
     }
 
@@ -116,18 +122,18 @@ final class CouncilStore {
 
     /// Shared Round-1 system prompt — the "advisor" instruction, user-editable. A seat can
     /// override it (see `Seat.systemPrompt`). Persisted in UserDefaults (non-sensitive).
-    var sharedSystemPrompt: String = CouncilStore.defaultSystemPrompt {
+    public var sharedSystemPrompt: String = CouncilStore.defaultSystemPrompt {
         didSet { UserDefaults.standard.set(sharedSystemPrompt, forKey: Self.promptKey) }
     }
 
     /// Which seat generates divergence + synthesis (and so spends that provider's credit). Persisted.
-    var synthesizerSeatID: Int = 0 {
+    public var synthesizerSeatID: Int = 0 {
         didSet { UserDefaults.standard.set(synthesizerSeatID, forKey: Self.synthKey) }
     }
 
     /// Which seat (if any) plays devil's advocate — in peer review it steelmans then attacks the
     /// emerging consensus instead of looking for agreement. -1 = none. Persisted.
-    var devilsAdvocateSeatID: Int = -1 {
+    public var devilsAdvocateSeatID: Int = -1 {
         didSet { UserDefaults.standard.set(devilsAdvocateSeatID, forKey: Self.devilKey) }
     }
 
@@ -135,27 +141,27 @@ final class CouncilStore {
     private static let promptKey = "council.systemPrompt"
     private static let synthKey = "council.synthesizerSeat"
     private static let devilKey = "council.devilsAdvocate"
-    static let defaultSystemPrompt =
+    public static let defaultSystemPrompt =
         "You are one of several AI advisors on a council. Answer the user's question directly, clearly, and concisely, in your own voice. Be honest; never flatter."
 
     /// Default per-seat personas. Three GENERAL-PURPOSE lenses (not domain-specific) so the council
     /// genuinely diverges on any non-trivial question out of the box — each still gives a complete
     /// answer, just from a different angle. Users can edit or clear these in Settings.
-    static let personaAnalyst = """
+    public static let personaAnalyst = """
     You are the analyst on a council of advisors. Reason from first principles: name the core \
     variables, state your assumptions, and show the logic that leads to your answer. Give a \
     complete, well-structured answer to the user's question, and be honest about tradeoffs and \
     uncertainty — if the real answer is "it depends," say exactly what it depends on. Don't hedge \
     to sound agreeable. Be concise and in your own voice.
     """
-    static let personaPractitioner = """
+    public static let personaPractitioner = """
     You are the practitioner on a council of advisors. Answer from real-world experience: what \
     actually happens in practice, the second-order effects, the practical constraints, and what \
     most people get wrong. Give a complete, decisive answer to the user's question, grounded in how \
     this plays out for real, and prefer concrete specifics over abstractions. Be concise and in \
     your own voice; no flattery.
     """
-    static let personaSkeptic = """
+    public static let personaSkeptic = """
     You are the skeptic on a council of advisors. Challenge the easy answer: question the framing, \
     surface the strongest counter-case, and name the risks and failure modes the others will likely \
     miss. Still give a complete answer to the user's question — take the position you actually find \
@@ -203,7 +209,7 @@ final class CouncilStore {
     clear map, not a command.
     """
 
-    init() {
+    public init() {
         if let data = UserDefaults.standard.data(forKey: seatsKey),
            let saved = try? JSONDecoder().decode([Seat].self, from: data), saved.count == 3 {
             seats = saved
@@ -221,11 +227,14 @@ final class CouncilStore {
         }
         if let n = UserDefaults.standard.object(forKey: Self.synthKey) as? Int { synthesizerSeatID = n }
         if let n = UserDefaults.standard.object(forKey: Self.devilKey) as? Int { devilsAdvocateSeatID = n }
-        refreshKeyCache()
+        // Only the APP warms the key cache (it shows all providers' status). A bare CLI process
+        // doing this would hit the Keychain for every provider at launch — a wall of permission
+        // prompts. The CLI reads lazily, only for seats it actually uses (see keyExists).
+        if Bundle.main.bundleIdentifier != nil { refreshKeyCache() }
         loadSessions()
     }
 
-    func saveSeats() {
+    public func saveSeats() {
         if let data = try? JSONEncoder().encode(seats) {
             UserDefaults.standard.set(data, forKey: seatsKey)
         }
@@ -234,7 +243,7 @@ final class CouncilStore {
     // MARK: - Shareable council config (export / import / presets)
 
     /// Capture the current setup as a shareable config (no keys — see CouncilConfig).
-    func currentConfig(name: String) -> CouncilConfig {
+    public func currentConfig(name: String) -> CouncilConfig {
         let seatConfigs = seats.map { s in
             CouncilConfig.SeatConfig(provider: s.provider, model: s.model,
                                      systemPrompt: s.systemPrompt,
@@ -251,7 +260,7 @@ final class CouncilStore {
 
     /// Apply a shared/preset config to the live seats. Keeps existing seat ids, maps each
     /// SeatConfig onto a seat by position. Keys are untouched (loaded from Keychain as needed).
-    func applyConfig(_ config: CouncilConfig) {
+    public func applyConfig(_ config: CouncilConfig) {
         for i in seats.indices {
             if let sc = config.seats.indices.contains(i) ? config.seats[i] : nil {
                 seats[i].provider = sc.provider
@@ -279,7 +288,7 @@ final class CouncilStore {
         keyRevision += 1
     }
 
-    func setSeatPrompt(_ prompt: String?, seatID: Int) {
+    public func setSeatPrompt(_ prompt: String?, seatID: Int) {
         guard let idx = seats.firstIndex(where: { $0.id == seatID }) else { return }
         seats[idx].systemPrompt = (prompt?.isEmpty == false) ? prompt : nil
         saveSeats()
@@ -287,26 +296,26 @@ final class CouncilStore {
 
     // MARK: - Keys
 
-    var isConfigured: Bool { seats.allSatisfy(hasKey) }
+    public var isConfigured: Bool { seats.allSatisfy(hasKey) }
 
-    func hasKey(_ seat: Seat) -> Bool {
+    public func hasKey(_ seat: Seat) -> Bool {
         guard let provider = seat.provider else { return false }   // no model picked yet
         return keyExists(provider)
     }
 
-    func setKey(_ key: String, for provider: LLMProvider) {
+    public func setKey(_ key: String, for provider: LLMProvider) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         try? KeychainStore.save(trimmed, account: provider.keychainAccount)
         keyRevision += 1
     }
 
-    func clearKey(for provider: LLMProvider) {
+    public func clearKey(for provider: LLMProvider) {
         KeychainStore.delete(account: provider.keychainAccount)
         keyRevision += 1
     }
 
-    func validateAndSaveKey(_ key: String, for seat: Seat) async -> String? {
+    public func validateAndSaveKey(_ key: String, for seat: Seat) async -> String? {
         guard let provider = seat.provider else { return "No model selected." }
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Empty key." }
@@ -316,7 +325,7 @@ final class CouncilStore {
         return nil
     }
 
-    func setModel(_ model: String, seatID: Int) {
+    public func setModel(_ model: String, seatID: Int) {
         guard let idx = seats.firstIndex(where: { $0.id == seatID }) else { return }
         let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
         seats[idx].model = trimmed.isEmpty ? (seats[idx].provider?.defaultModel ?? "") : trimmed
@@ -324,7 +333,7 @@ final class CouncilStore {
     }
 
     /// Assign (or change) a seat's provider, resetting the model to that provider's default.
-    func setProvider(_ provider: LLMProvider, seatID: Int) {
+    public func setProvider(_ provider: LLMProvider, seatID: Int) {
         guard let idx = seats.firstIndex(where: { $0.id == seatID }) else { return }
         seats[idx].provider = provider
         seats[idx].model = provider.defaultModel
@@ -333,7 +342,7 @@ final class CouncilStore {
     }
 
     /// Reset a seat back to unassigned ("PICK YOUR MODEL").
-    func clearProvider(seatID: Int) {
+    public func clearProvider(seatID: Int) {
         guard let idx = seats.firstIndex(where: { $0.id == seatID }) else { return }
         seats[idx].provider = nil
         seats[idx].model = ""
@@ -342,18 +351,18 @@ final class CouncilStore {
     }
 
     /// True if another seat already uses this provider — drives the duplicate-token warning.
-    func providerInUse(_ provider: LLMProvider, excluding seatID: Int) -> Bool {
+    public func providerInUse(_ provider: LLMProvider, excluding seatID: Int) -> Bool {
         seats.contains { $0.id != seatID && $0.provider == provider }
     }
 
     /// Per-seat sampling override. Passing nil clears it (falls back to provider default).
-    func setTemperature(_ value: Double?, seatID: Int) {
+    public func setTemperature(_ value: Double?, seatID: Int) {
         guard let idx = seats.firstIndex(where: { $0.id == seatID }) else { return }
         seats[idx].temperature = value.map { min(max($0, 0), 2) }   // clamp to a sane range
         saveSeats()
     }
 
-    func setMaxTokens(_ value: Int?, seatID: Int) {
+    public func setMaxTokens(_ value: Int?, seatID: Int) {
         guard let idx = seats.firstIndex(where: { $0.id == seatID }) else { return }
         // Treat 0/negative as "no override"; cap very large values to avoid runaway costs.
         if let v = value, v > 0 { seats[idx].maxTokens = min(v, 64_000) }
@@ -363,33 +372,33 @@ final class CouncilStore {
 
     // MARK: - Round navigation + viewed accessors
 
-    var roundCount: Int { rounds.count }
-    var isViewingLatest: Bool { viewingRound >= rounds.count - 1 }
-    var canGoPrevRound: Bool { viewingRound > 0 }
-    var canGoNextRound: Bool { viewingRound < rounds.count - 1 }
-    func prevRound() { if canGoPrevRound { viewingRound -= 1; clearDeliberationErrors() } }
-    func nextRound() { if canGoNextRound { viewingRound += 1; clearDeliberationErrors() } }
+    public var roundCount: Int { rounds.count }
+    public var isViewingLatest: Bool { viewingRound >= rounds.count - 1 }
+    public var canGoPrevRound: Bool { viewingRound > 0 }
+    public var canGoNextRound: Bool { viewingRound < rounds.count - 1 }
+    public func prevRound() { if canGoPrevRound { viewingRound -= 1; clearDeliberationErrors() } }
+    public func nextRound() { if canGoNextRound { viewingRound += 1; clearDeliberationErrors() } }
 
     /// Drop the transient divergence/synthesis errors (they belong to one attempt on one round).
-    func clearDeliberationErrors() { divergenceError = nil; synthesisError = nil }
+    public func clearDeliberationErrors() { divergenceError = nil; synthesisError = nil }
 
     private var viewedRound: Round? { rounds.indices.contains(viewingRound) ? rounds[viewingRound] : nil }
-    var viewedQuestion: String { viewedRound?.question ?? "" }
-    func viewedAnswer(_ seatID: Int) -> String? { viewedRound?.answers[seatID] }
-    func viewedPeerReview(_ seatID: Int) -> String? { viewedRound?.peerReviews[seatID] }
+    public var viewedQuestion: String { viewedRound?.question ?? "" }
+    public func viewedAnswer(_ seatID: Int) -> String? { viewedRound?.answers[seatID] }
+    public func viewedPeerReview(_ seatID: Int) -> String? { viewedRound?.peerReviews[seatID] }
     /// Provider name recorded for this seat's answer in the viewed round (for the panel title when
     /// the seat itself is currently unassigned, e.g. a reopened session).
-    func viewedAnswerProvider(_ seatID: Int) -> String? { viewedRound?.answerProviders[seatID] }
+    public func viewedAnswerProvider(_ seatID: Int) -> String? { viewedRound?.answerProviders[seatID] }
     /// Read-only views of the current round's cross-model artifacts (used by the UI).
-    var divergenceText: String? { viewedRound?.divergence }
-    var synthesisText: String? { viewedRound?.synthesis }
+    public var divergenceText: String? { viewedRound?.divergence }
+    public var synthesisText: String? { viewedRound?.synthesis }
     /// The verdict's AGREEMENT score (0–100). Named honestly — the UI shows 100 − this as divergence.
-    var agreementScore: Int? { viewedRound?.divergenceScore }
-    var divergenceCamps: Int? { viewedRound?.divergenceCamps }
-    var outlierName: String? { viewedRound?.outlier }
+    public var agreementScore: Int? { viewedRound?.divergenceScore }
+    public var divergenceCamps: Int? { viewedRound?.divergenceCamps }
+    public var outlierName: String? { viewedRound?.outlier }
     /// The outlier advisor's own answer for the viewed round — for Dissent. Prefers the seat id
     /// resolved at verdict time; falls back to panel-name matching for sessions saved before that.
-    var outlierAnswer: String? {
+    public var outlierAnswer: String? {
         guard let round = viewedRound else { return nil }
         if let sid = round.outlierSeatID, let a = round.answers[sid], !a.isEmpty { return a }
         guard let name = round.outlier,
@@ -397,47 +406,57 @@ final class CouncilStore {
               let a = round.answers[sid], !a.isEmpty else { return nil }
         return a
     }
-    var hasDissent: Bool { outlierAnswer != nil }
+    public var hasDissent: Bool { outlierAnswer != nil }
 
     /// Session token + cost totals (sum across rounds) — an estimate.
-    var sessionInputTokens: Int { rounds.reduce(0) { $0 + $1.inputTokens } }
-    var sessionOutputTokens: Int { rounds.reduce(0) { $0 + $1.outputTokens } }
-    var sessionCostUSD: Double { rounds.reduce(0) { $0 + $1.costUSD } }
+    public var sessionInputTokens: Int { rounds.reduce(0) { $0 + $1.inputTokens } }
+    public var sessionOutputTokens: Int { rounds.reduce(0) { $0 + $1.outputTokens } }
+    public var sessionCostUSD: Double { rounds.reduce(0) { $0 + $1.costUSD } }
 
     // MARK: Dashboard aggregates (all saved sessions; the current session joins after its first save).
-    var allTimeCostUSD: Double { sessions.reduce(0) { $0 + $1.totalCostUSD } }
-    var thisMonthCostUSD: Double {
+    public var allTimeCostUSD: Double { sessions.reduce(0) { $0 + $1.totalCostUSD } }
+    public var thisMonthCostUSD: Double {
         let cal = Calendar.current
         return sessions
             .filter { cal.isDate($0.updatedAt, equalTo: Date(), toGranularity: .month) }
             .reduce(0) { $0 + $1.totalCostUSD }
     }
     /// Most-used model (panel name) across all rounds, for the dashboard's "top model".
-    var topModelName: String? {
+    public var topModelName: String? {
         var counts: [String: Int] = [:]
         for s in sessions { for r in s.rounds { for name in r.answerProviders.values { counts[name, default: 0] += 1 } } }
         return counts.max { $0.value < $1.value }?.key
     }
     /// Whether a key exists for this provider — reads the cache, never the Keychain (so it's safe
     /// to call from a view body). Key-free providers (Ollama) are always "ready".
-    func keyExists(_ p: LLMProvider) -> Bool {
-        !p.requiresAPIKey || keyCache.contains(p)
+    public func keyExists(_ p: LLMProvider) -> Bool {
+        if !p.requiresAPIKey || keyCache.contains(p) { return true }
+        // CLI (no bundle): the cache is never warmed — check the Keychain directly, but only
+        // when actually asked about this provider (one prompt max, for a seat in use).
+        if Bundle.main.bundleIdentifier == nil,
+           let k = (try? KeychainStore.read(account: p.keychainAccount)) ?? nil, !k.isEmpty {
+            keyCache.insert(p)
+            return true
+        }
+        return false
     }
 
     // MARK: Spend alert (opt-in local notification when total spend crosses a threshold)
-    static let spendAlertOnKey = "council.spendAlertOn"
-    static let spendAlertAmtKey = "council.spendAlertAmt"
+    public static let spendAlertOnKey = "council.spendAlertOn"
+    public static let spendAlertAmtKey = "council.spendAlertAmt"
     private static let spendAlertFiredKey = "council.spendAlertFiredAt"
 
     /// Re-arm the spend alert (called when the user re-enables it or changes the threshold) so a
     /// freshly-configured alert can fire again even if it fired for an earlier threshold.
-    static func rearmSpendAlert() {
+    public static func rearmSpendAlert() {
         UserDefaults.standard.removeObject(forKey: spendAlertFiredKey)
     }
 
     /// Fire a one-time local notification when all-time spend first crosses the user's threshold.
     /// Cheap; called from saveConversation so every spend path is covered. No-op unless opted in.
-    func checkSpendAlert() {
+    public func checkSpendAlert() {
+        // UNUserNotificationCenter requires a real app bundle — a bare CLI process has none.
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let d = UserDefaults.standard
         guard d.bool(forKey: Self.spendAlertOnKey) else { return }
         let threshold = d.double(forKey: Self.spendAlertAmtKey)
@@ -466,7 +485,7 @@ final class CouncilStore {
     private var anyLoading: Bool { status.values.contains { $0 == .loading } || deliberationBusy }
     /// True while any advisor or a deliberation round is generating. The UI uses this to lock
     /// session switching so an in-flight write can't land in a session swapped out underneath it.
-    var isWorking: Bool { anyLoading }
+    public var isWorking: Bool { anyLoading }
     /// The chosen synthesizer seat if it has a key; otherwise the first connected seat.
     private var synthesizerSeat: Seat? {
         if let chosen = seats.first(where: { $0.id == synthesizerSeatID }), hasKey(chosen) { return chosen }
@@ -475,31 +494,31 @@ final class CouncilStore {
     private func canDeliberate(_ idx: Int) -> Bool { answeredSeats(in: idx).count >= 2 && !anyLoading }
 
     /// Peer review / divergence / synthesis operate on the round you're viewing.
-    var canPeerReview: Bool { canDeliberate(viewingRound) }
-    var canSynthesize: Bool { canDeliberate(viewingRound) }
+    public var canPeerReview: Bool { canDeliberate(viewingRound) }
+    public var canSynthesize: Bool { canDeliberate(viewingRound) }
     /// Whether the viewed round already has peer reviews (so clicking PEER REVIEW just shows them).
-    var hasPeerReviewForViewedRound: Bool {
+    public var hasPeerReviewForViewedRound: Bool {
         viewedRound?.peerReviews.values.contains { !$0.isEmpty } ?? false
     }
     /// One-round bounded debate: available once peer review exists, and only until it has run once
     /// (hard cap — a single rebuttal round per round, so cost stays bounded).
-    var canRebut: Bool { hasPeerReviewForViewedRound && !hasRebuttalForViewedRound }
-    var hasRebuttalForViewedRound: Bool {
+    public var canRebut: Bool { hasPeerReviewForViewedRound && !hasRebuttalForViewedRound }
+    public var hasRebuttalForViewedRound: Bool {
         viewedRound?.rebuttals.values.contains { !$0.isEmpty } ?? false
     }
     /// The revised (or held) answer a seat gave in the rebuttal round, if any.
-    func viewedRebuttal(_ seatID: Int) -> String? {
+    public func viewedRebuttal(_ seatID: Int) -> String? {
         guard let r = viewedRound?.rebuttals[seatID], !r.isEmpty else { return nil }
         return r
     }
-    var synthesizerName: String? { synthesizerSeat?.provider?.panelName }
-    var hasSession: Bool { rounds.contains { !$0.answeredSeatIDs.isEmpty } }
+    public var synthesizerName: String? { synthesizerSeat?.provider?.panelName }
+    public var hasSession: Bool { rounds.contains { !$0.answeredSeatIDs.isEmpty } }
 
     // MARK: - Rounds
 
     /// Round 1: a NEW round; every connected seat answers in parallel, streaming token-by-token,
     /// each with its own prior context. An optional image rides on the question.
-    func ask(_ query: String, image: ImageAttachment? = nil) async {
+    public func ask(_ query: String, image: ImageAttachment? = nil) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || image != nil else { return }
         let prompt = trimmed.isEmpty ? "Describe and assess this image." : trimmed
@@ -534,7 +553,7 @@ final class CouncilStore {
     }
 
     /// Round 2: each advisor reviews the others' answers (anonymized) for the VIEWED round.
-    func peerReview() async {
+    public func peerReview() async {
         let idx = viewingRound
         let answered = answeredSeats(in: idx)
         guard answered.count >= 2, rounds.indices.contains(idx) else { return }
@@ -599,12 +618,13 @@ final class CouncilStore {
     /// Bounded debate — one optional rebuttal round. Each advisor sees its own answer plus where the
     /// whole council landed (anonymized, so no brand bias creeps back in) and either revises or holds,
     /// briefly saying why. Hard-capped at a single round per round so cost can't run away.
-    func runRebuttal() async {
+    public func runRebuttal() async {
         let idx = viewingRound
         let answered = answeredSeats(in: idx)
         guard answered.count >= 2, rounds.indices.contains(idx), !hasRebuttalForViewedRound else { return }
         deliberationBusy = true
         generatingRound = idx
+        pipelineStage = "Debate"
         for s in answered { status[s.id] = .loading; rounds[idx].rebuttals[s.id] = "" }
         let pairs = answered.map { (seat: $0, answer: rounds[idx].answers[$0.id] ?? "") }
 
@@ -662,10 +682,32 @@ final class CouncilStore {
         }
         deliberationBusy = false
         generatingRound = nil
+        pipelineStage = nil
         saveConversation()
     }
 
-    func runDivergence() async {
+    /// The single-page flow: once a round's answers are in, the deliberation stages run
+    /// automatically in pipeline order. Each stage skips itself if it already exists, so this is
+    /// safe to call after a regenerate too. Cancellation (Stop) exits between stages.
+    public func runAutoPipeline() async {
+        let idx = viewingRound
+        guard rounds.indices.contains(idx), answeredSeats(in: idx).count >= 2 else { return }
+        if !hasPeerReviewForViewedRound, !Task.isCancelled {
+            pipelineStage = "Peer review"
+            await peerReview()
+        }
+        if rounds.indices.contains(idx), rounds[idx].divergence == nil, !Task.isCancelled {
+            pipelineStage = "Divergence"
+            await runDivergence()
+        }
+        if rounds.indices.contains(idx), rounds[idx].synthesis == nil, !Task.isCancelled {
+            pipelineStage = "Synthesis"
+            await runSynthesis()
+        }
+        pipelineStage = nil
+    }
+
+    public func runDivergence() async {
         let idx = viewingRound
         guard canDeliberate(idx), let seat = synthesizerSeat, rounds.indices.contains(idx) else { return }
         deliberationBusy = true
@@ -688,7 +730,7 @@ final class CouncilStore {
         saveConversation()
     }
 
-    func runSynthesis() async {
+    public func runSynthesis() async {
         let idx = viewingRound
         guard canDeliberate(idx), let seat = synthesizerSeat, rounds.indices.contains(idx) else { return }
         deliberationBusy = true
@@ -707,7 +749,7 @@ final class CouncilStore {
     }
 
     /// Re-run a single advisor's answer in the latest round (only when viewing it).
-    func regenerate(seatID: Int) async {
+    public func regenerate(seatID: Int) async {
         let idx = rounds.count - 1
         guard idx == viewingRound, rounds.indices.contains(idx), !anyLoading,
               let seat = seats.first(where: { $0.id == seatID }), hasKey(seat) else { return }
@@ -738,10 +780,11 @@ final class CouncilStore {
         saveConversation()
     }
 
-    func cancelAll() {
+    public func cancelAll() {
         for id in status.keys where status[id] == .loading { status[id] = .idle }
         deliberationBusy = false
         generatingRound = nil
+        pipelineStage = nil
     }
 
     // MARK: - Round helpers
@@ -864,7 +907,7 @@ final class CouncilStore {
         return (min(100, max(0, a)), camps, outlier)
     }
 
-    typealias StreamResult = (text: String?, input: Int, output: Int, cancelled: Bool, error: String?)
+    public typealias StreamResult = (text: String?, input: Int, output: Int, cancelled: Bool, error: String?)
 
     /// Stream one model call, feeding the growing text to `onDelta`. Returns final text (nil on
     /// hard failure), token usage, and whether it was cancelled (partial text is kept on cancel).
@@ -944,6 +987,9 @@ final class CouncilStore {
                 if provider == .ollama {
                     return "Can't reach Ollama at \(LLMProvider.ollamaHost) — is it running? Start it with 'ollama serve', or set a different address in Settings → Models."
                 }
+                if let slot = provider.customSlot {
+                    return "Can't reach \(provider.panelName) at \(LLMProvider.customHost(slot)) — is the server running and reachable from this Mac?"
+                }
                 return "Couldn't reach \(provider.panelName). Check your connection and try again."
             default:
                 break
@@ -954,7 +1000,7 @@ final class CouncilStore {
 
     // MARK: - Export
 
-    func exportMarkdown() -> String {
+    public func exportMarkdown() -> String {
         // Attribute by what's RECORDED on the round, not the current seat assignment — a reopened
         // session may have different (or no) providers on its seats today.
         func name(_ round: Round, _ seatID: Int) -> String {
@@ -989,28 +1035,99 @@ final class CouncilStore {
         return out
     }
 
+    /// A decision-ready Markdown memo for the VIEWED round — readable enough to paste into a
+    /// design doc or ADR as-is. Excerpts (not full transcripts) for answers; full synthesis.
+    /// No keys, no internal ids.
+    public func exportDecisionMemo() -> String {
+        guard rounds.indices.contains(viewingRound) else { return "" }
+        let round = rounds[viewingRound]
+
+        /// First markdown paragraph of a text, capped — a deterministic, zero-cost "summary".
+        func excerpt(_ text: String, cap: Int = 500) -> String {
+            let para = text
+                .components(separatedBy: "\n\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty && !$0.hasPrefix("#") } ?? text
+            let flat = para.replacingOccurrences(of: "\n", with: " ")
+            return flat.count <= cap ? flat : String(flat.prefix(cap)).trimmingCharacters(in: .whitespaces) + "…"
+        }
+        func name(_ seatID: Int) -> String {
+            round.answerProviders[seatID] ?? seats.first { $0.id == seatID }?.provider?.panelName ?? "Advisor"
+        }
+
+        let df = ISO8601DateFormatter(); df.formatOptions = [.withFullDate]
+        var out = "# Council decision memo\n\n"
+        out += "*\(df.string(from: Date()))*\n\n"
+        out += "## Question\n\n\(round.question)\n\n"
+
+        out += "## Council\n\n"
+        for seat in seats where round.answers[seat.id]?.isEmpty == false {
+            let model = (seat.provider?.panelName == round.answerProviders[seat.id]) ? " — `\(seat.model)`" : ""
+            out += "- \(name(seat.id))\(model)\n"
+        }
+        out += "\n## Answers (excerpts)\n\n"
+        for seat in seats {
+            if let a = round.answers[seat.id], !a.isEmpty {
+                out += "**\(name(seat.id)):** \(excerpt(a))\n\n"
+            }
+        }
+
+        if let agreement = round.divergenceScore {
+            out += "## Divergence\n\n"
+            out += "- **Divergence: \(100 - agreement)/100** (how far apart the council landed)\n"
+            if let c = round.divergenceCamps { out += "- Camps: \(c)\n" }
+            if let o = round.outlier { out += "- Outlier: \(o)\n" }
+            out += "\n*Measures agreement, not correctness — models can share the same blind spot.*\n\n"
+        }
+        if let outlier = round.outlier {
+            let dissentAnswer = round.outlierSeatID.flatMap { round.answers[$0] }
+                ?? round.answerProviders.first { $0.value == outlier }.flatMap { round.answers[$0.key] }
+            if let d = dissentAnswer, !d.isEmpty {
+                out += "## Minority view — \(outlier)\n\n\(excerpt(d, cap: 700))\n\n"
+            }
+        }
+        if let s = round.synthesis, !s.isEmpty {
+            out += "## Synthesis\n\n\(s)\n\n"
+        }
+        if let cur = sessions.first(where: { $0.id == currentSessionID }),
+           let d = cur.decision, !d.isEmpty {
+            out += "## Decision\n\n\(d)\n\n"
+            if let o = cur.outcome, !o.isEmpty { out += "**Outcome:** \(o)\n\n" }
+        }
+        return out
+    }
+
     // MARK: - Sessions (local multi-session history — one JSON file each, no server)
 
-    var sessions: [Session] = []
+    public var sessions: [Session] = []
     private var currentSessionID = UUID()
     private var currentTitle = ""
     private var currentCreatedAt = Date()
-    var currentSession: UUID { currentSessionID }
+    public var currentSession: UUID { currentSessionID }
 
-    static var sessionsFolderURL: URL? {
-        guard let base = try? FileManager.default.url(
+    public static var sessionsFolderURL: URL? {
+        let fm = FileManager.default
+        // Inside the sandboxed app, application-support already resolves into the app container.
+        // A NON-sandboxed process (the `council` CLI) must target that container explicitly, so
+        // CLI runs land in the same history the app shows.
+        if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] == nil {
+            let container = fm.homeDirectoryForCurrentUser.appendingPathComponent(
+                "Library/Containers/com.joseph.Council/Data/Library/Application Support/Council/Sessions")
+            if fm.fileExists(atPath: container.path) { return container }
+        }
+        guard let base = try? fm.url(
             for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
         ) else { return nil }
         let dir = base.appendingPathComponent("Council/Sessions", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    var conversationFolderDisplayPath: String {
+    public var conversationFolderDisplayPath: String {
         guard let dir = Self.sessionsFolderURL else { return "—" }
         return dir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
-    var conversationFileDisplayPath: String { conversationFolderDisplayPath }
+    public var conversationFileDisplayPath: String { conversationFolderDisplayPath }
 
     private func sessionURL(_ id: UUID) -> URL? {
         Self.sessionsFolderURL?.appendingPathComponent("\(id.uuidString).json")
@@ -1021,7 +1138,7 @@ final class CouncilStore {
         return (e, d)
     }
 
-    func loadSessions() {
+    public func loadSessions() {
         guard let dir = Self.sessionsFolderURL,
               let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
         let dec = Self.sessionCoder.dec
@@ -1038,8 +1155,8 @@ final class CouncilStore {
         return q.isEmpty ? "Untitled" : String(q.prefix(48))
     }
 
-    func saveConversation() {
-        guard hasSession else { return }
+    public func saveConversation() {
+        guard persistenceEnabled, hasSession else { return }
         if currentTitle.isEmpty { currentTitle = derivedTitle }
         let prior = sessions.first { $0.id == currentSessionID }
         var s = Session(id: currentSessionID, title: currentTitle,
@@ -1061,17 +1178,17 @@ final class CouncilStore {
     // MARK: - Decision journal (local only)
 
     /// Sessions that have a recorded decision, newest decision first — the journal feed.
-    var journal: [Session] {
+    public var journal: [Session] {
         sessions.filter { ($0.decision?.isEmpty == false) }
                 .sorted { ($0.decisionAt ?? .distantPast) > ($1.decisionAt ?? .distantPast) }
     }
     /// Record (or update) what the user actually decided after this council.
-    func recordDecision(_ text: String, for id: UUID) {
+    public func recordDecision(_ text: String, for id: UUID) {
         if id == currentSessionID && !sessions.contains(where: { $0.id == id }) { saveConversation() }
         updateSession(id) { $0.decision = text; $0.decisionAt = Date() }
     }
     /// Record how a past decision turned out — closing the loop on whether the council's read held up.
-    func recordOutcome(_ text: String, for id: UUID) {
+    public func recordOutcome(_ text: String, for id: UUID) {
         updateSession(id) { $0.outcome = text; $0.outcomeAt = Date() }
     }
     private func updateSession(_ id: UUID, _ mutate: (inout Session) -> Void) {
@@ -1094,12 +1211,12 @@ final class CouncilStore {
         clearDeliberationErrors()
     }
 
-    func openSession(_ s: Session) {
+    public func openSession(_ s: Session) {
         guard !anyLoading else { return }   // don't swap rounds out from under a running task
         apply(s)
     }
 
-    func newSession() {
+    public func newSession() {
         guard !anyLoading else { return }
         currentSessionID = UUID()
         currentTitle = ""
@@ -1111,7 +1228,7 @@ final class CouncilStore {
         clearDeliberationErrors()
     }
 
-    func renameSession(_ id: UUID, to title: String) {
+    public func renameSession(_ id: UUID, to title: String) {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         if id == currentSessionID { currentTitle = t }
@@ -1122,7 +1239,7 @@ final class CouncilStore {
         }
     }
 
-    func deleteSession(_ id: UUID) {
+    public func deleteSession(_ id: UUID) {
         // Deleting the active session resets rounds → must not happen mid-generation.
         if id == currentSessionID && anyLoading { return }
         if let url = sessionURL(id) { try? FileManager.default.removeItem(at: url) }
@@ -1140,12 +1257,12 @@ final class CouncilStore {
         return h
     }
 
-    func searchedSessions(_ query: String) -> [Session] {
+    public func searchedSessions(_ query: String) -> [Session] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return q.isEmpty ? sessions : sessions.filter { haystack($0).contains(q) }
     }
 
-    func revealConversationFolder() {
+    public func revealConversationFolder() {
         guard let dir = Self.sessionsFolderURL else { return }
         NSWorkspace.shared.open(dir)
     }

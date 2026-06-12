@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sparkle appcast for Council. Release flow:
+     1. build + zip:  ditto -c -k --keepParent Council.app Council-X.Y.Z-macOS.zip
+     2. sign:         sign_update -f <private key> Council-X.Y.Z-macOS.zip
+     3. add an <item> below (newest first) with the gh-release download URL + signature + length
+     4. commit + push (guard first), then gh release upload the zip -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Council</title>
+    <item>
+      <title>1.1.0</title>
+      <sparkle:version>110</sparkle:version>
+      <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <link>https://github.com/albertofettucini/Council/releases/tag/v1.1.0</link>
+      <enclosure
+        url="https://github.com/albertofettucini/Council/releases/download/v1.1.0/Council-1.1.0-macOS.zip"
+        sparkle:edSignature="wW5nPAltXfaEqSoX07F5eCP6QrravOFvbomGdGo+atn1sG65V4EcZoEiDMjWCQ2papXexib5fQbwLsKMql+pCQ=="
+        length="8472333"
+        type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>

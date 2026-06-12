@@ -4,17 +4,17 @@ import Foundation
 /// which provider/model sits in each seat, each seat's persona (system prompt) and sampling, the
 /// shared prompt, and which seats synthesize / play devil's advocate. API keys are NEVER part of
 /// this — they live only in the Keychain, per machine. Export → council.json → share → import.
-struct CouncilConfig: Codable, Identifiable {
-    var id = UUID()
-    var name: String
-    var detail: String?              // a one-line description (shown for presets)
-    var seats: [SeatConfig]
-    var sharedSystemPrompt: String
+public struct CouncilConfig: Codable, Identifiable {
+    public var id = UUID()
+    public var name: String
+    public var detail: String?              // a one-line description (shown for presets)
+    public var seats: [SeatConfig]
+    public var sharedSystemPrompt: String
     /// Index into `seats` (0-based) of the synthesizer / devil's advocate. nil = none / default.
-    var synthesizerSeatIndex: Int?
-    var devilsAdvocateSeatIndex: Int?
+    public var synthesizerSeatIndex: Int?
+    public var devilsAdvocateSeatIndex: Int?
 
-    struct SeatConfig: Codable {
+    public struct SeatConfig: Codable {
         var provider: LLMProvider?    // nil = an intentionally-empty seat the importer fills in
         var model: String
         var systemPrompt: String?
@@ -23,14 +23,14 @@ struct CouncilConfig: Codable, Identifiable {
     }
 
     /// Marker written into the file so we can sanity-check an import.
-    var schema: String = "council.v1"
+    public var schema: String = "council.v1"
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case id, name, detail, seats, sharedSystemPrompt
         case synthesizerSeatIndex, devilsAdvocateSeatIndex, schema
     }
 
-    init(id: UUID = UUID(), name: String, detail: String? = nil, seats: [SeatConfig],
+    public init(id: UUID = UUID(), name: String, detail: String? = nil, seats: [SeatConfig],
          sharedSystemPrompt: String, synthesizerSeatIndex: Int? = nil,
          devilsAdvocateSeatIndex: Int? = nil) {
         self.id = id
@@ -42,7 +42,7 @@ struct CouncilConfig: Codable, Identifiable {
         self.devilsAdvocateSeatIndex = devilsAdvocateSeatIndex
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
         name = (try? c.decode(String.self, forKey: .name)) ?? "Imported council"
@@ -60,7 +60,7 @@ struct CouncilConfig: Codable, Identifiable {
 extension CouncilConfig {
     /// One curated starting point. Models default to a strong trio; the importer keeps whatever
     /// keys it already has, and any seat can be re-picked afterward.
-    static let presets: [CouncilConfig] = [
+    public static let presets: [CouncilConfig] = [
         CouncilConfig(
             name: "Code Review Council",
             detail: "Three engineers review your code from different angles.",

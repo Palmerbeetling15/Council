@@ -27,24 +27,31 @@ Gemini and more — each answers independently, and then the interesting part be
 
 ## How it works
 
-1. **Ask.** Pose a question to your council (three advisors by default; each can be any of nine providers).
+1. **Ask.** Pose a question to your council (three advisors; each seat can be any of twelve backends).
 2. **Parallel answers.** Every advisor responds at once, streaming live in its own panel.
 3. **Blind peer review.** Each advisor critiques the others' answers without knowing who wrote them — no brand bias, just the argument.
-4. **Divergence.** See exactly where the council splits, and why.
-5. **Synthesis.** A distilled read of where the answers converge.
-6. **You decide.** Council lays out the spread; the judgment stays yours.
+4. **Divergence — with a score.** A 0–100 read of how far apart the council landed, how many camps formed, and who the outlier is. It measures agreement, not correctness.
+5. **Debate (optional).** One bounded rebuttal round: each advisor revises or holds, and says why. Who moved, who held.
+6. **Synthesis & Dissent.** A decision-ready distillation — plus the outlier's full answer spotlighted, because the majority can be confidently wrong together.
+7. **You decide — and log it.** Record your decision in the journal, and later, how it actually turned out.
 
 ## Features
 
-- 🧠 **Up to nine providers** — Claude · GPT (OpenAI) · Gemini · DeepSeek · Grok (xAI) · Mistral · Perplexity · OpenRouter · Ollama (local — needs [Ollama](https://ollama.com) installed & running + a model pulled, e.g. `ollama pull llama3.2`)
+- 🧠 **Twelve backends** — Claude · GPT (OpenAI) · Gemini · DeepSeek · Grok (xAI) · Mistral · Perplexity · OpenRouter · Ollama (local, needs [Ollama](https://ollama.com) running) · Apple Intelligence (on-device, free) · two **custom OpenAI-compatible endpoints** (llama.cpp, LM Studio, vLLM, a second Ollama box — with a test-connection button that pulls the server's real model list)
 - ⚡ **Live streaming** answers, side by side
 - 🎭 **Distinct personas** per seat (Analyst · Practitioner · Skeptic) for real divergence — not three ways of saying the same thing
 - 😈 **Devil's Advocate** role to pressure-test the consensus
-- 🔭 **Divergence & Synthesis** as first-class views, alongside a full **Peer Review** page
+- 📊 **Divergence score** — 0–100 how far apart the council landed, camps, and the outlier; agreement, not correctness
+- 🗣️ **Bounded debate** — one optional rebuttal round; original answers stay tucked underneath so you see what moved
+- ❗ **Dissent** — the outlier's full answer, surfaced on its own to judge for yourself
+- 📓 **Decision journal** — log what you chose, then come back and record how it turned out (local only)
+- 🧭 **Two layouts** — Flow (one page; analysis appears beneath the answers) or Classic (each stage its own screen)
 - 🖼️ **Vision** — drop in an image for the models that support it
 - 💸 **Calm cost estimate** — a running token/$ tally, your spend at a glance, and an optional spend alert
-- 📤 **Export** to Markdown, PDF, or image; **share councils** as importable presets
-- 💾 **Local history** of every session
+- 📤 **Export** — Markdown, PDF, image, or a paste-ready **decision memo**; **share councils** as importable presets
+- ⌨️ **`council` CLI** — the same engine in your terminal: pipe documents in, get JSON out, gate CI on divergence
+- 🔄 **In-app updates** — new versions install from inside the app
+- 💾 **Local history** of every session (CLI runs land there too)
 - 🪟 **Native SwiftUI** — real Liquid Glass on macOS 26, a graceful material fallback on 14+
 
 ## Privacy — bring your own keys
@@ -74,7 +81,24 @@ open Council.xcodeproj   # Xcode 16+ (Xcode 26 for the Liquid Glass build)
 # ⌘R to run
 ```
 
-No dependencies, no package manager — pure SwiftUI + Foundation.
+No third-party dependencies — pure SwiftUI + Foundation. The engine lives in a local Swift package, `CouncilKit`, shared by the app and the CLI.
+
+## CLI
+
+The same engine, in your terminal — for scripting, CI, and piping documents in:
+
+```sh
+cd CouncilKit && swift build -c release
+cp .build/release/council /usr/local/bin/   # or anywhere on your PATH
+
+council keys set claude                      # keys go to the macOS Keychain (shared with the app)
+council "should we ship now or wait?" --seats claude,gpt,gemini
+cat design.md | council "review this" --md   # attach a document, get a decision memo
+council "..." --json                         # structured output (schema council.cli.v1)
+council "..." --fail-above 40                # CI gate: exit 1 if the council diverges too much
+```
+
+CLI runs land in the app's history, so you can reopen them in the UI. `council --help` has the full flag list.
 
 ## A typical question
 
@@ -86,9 +110,9 @@ shows the real fault line, and Synthesis hands you a decision-ready summary.
 
 ## Roadmap
 
-- Apple on-device model as a no-key seat
 - Selective deliberation — review only the seats you choose
-- Decision journal — capture what you decided, and why
+- More local backends out of the box
+- Outcome reminders — revisit journal decisions after a set time
 
 ## Contributing
 

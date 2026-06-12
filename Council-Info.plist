@@ -8,6 +8,15 @@
 	     providers (Claude, GPT, Gemini, …) are HTTPS and unaffected.
 	     Kept at the repo root (outside the synced Council/ source folder) so Xcode
 	     doesn't auto-add it to Copy Bundle Resources. -->
+	<!-- Sparkle in-app updates: the appcast lives in this repo (raw URL), updates are signed
+	     with our EdDSA key (public half below; private key NEVER enters the repo). The installer
+	     XPC service is enabled because the app is sandboxed. -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/albertofettucini/Council/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ebQJqPEUVaCSBjFbDSjs7iiXRylBjtQBoro+qwR8UKo=</string>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

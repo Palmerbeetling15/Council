@@ -4,36 +4,37 @@ import Foundation
 /// `Sendable` so it can cross into the parallel task group. The image rides only on the
 /// transient request; only the text question is appended to saved history, so session
 /// files on disk never carry image bytes.
-struct ImageAttachment: Sendable, Codable {
-    let data: Data
-    let mediaType: String           // e.g. "image/png"
-    var base64: String { data.base64EncodedString() }
+public struct ImageAttachment: Sendable, Codable {
+    public let data: Data
+    public let mediaType: String           // e.g. "image/png"
+    public var base64: String { data.base64EncodedString() }
+    public init(data: Data, mediaType: String) { self.data = data; self.mediaType = mediaType }
 }
 
 /// One message in a conversation. `system` carries instructions; `user`/`assistant`
 /// carry the back-and-forth. An image may ride on a user message. This is the unit the
 /// whole deliberation pipeline is built on — multi-turn history, and (soon) feeding each
 /// model the others' answers for peer review.
-struct ChatMessage: Sendable, Codable {
-    enum Role: String, Sendable, Codable { case system, user, assistant }
-    let role: Role
-    let text: String
-    var image: ImageAttachment? = nil
+public struct ChatMessage: Sendable, Codable {
+    public enum Role: String, Sendable, Codable { case system, user, assistant }
+    public let role: Role
+    public let text: String
+    public var image: ImageAttachment? = nil
 
-    static func system(_ t: String) -> ChatMessage { .init(role: .system, text: t) }
-    static func user(_ t: String, image: ImageAttachment? = nil) -> ChatMessage { .init(role: .user, text: t, image: image) }
-    static func assistant(_ t: String) -> ChatMessage { .init(role: .assistant, text: t) }
+    public static func system(_ t: String) -> ChatMessage { .init(role: .system, text: t) }
+    public static func user(_ t: String, image: ImageAttachment? = nil) -> ChatMessage { .init(role: .user, text: t, image: image) }
+    public static func assistant(_ t: String) -> ChatMessage { .init(role: .assistant, text: t) }
 }
 
 /// A streamed piece of a response: a text delta, or the final token usage.
-enum StreamChunk: Sendable {
+public enum StreamChunk: Sendable {
     case text(String)
     case usage(input: Int, output: Int)
 }
 
 /// A uniform interface over every LLM backend. Each provider has its own wire format
 /// under the hood, but callers only ever see these methods.
-protocol LLMClient {
+public protocol LLMClient {
     /// Token-by-token stream. Yields text deltas as they arrive, then a usage chunk.
     func stream(messages: [ChatMessage], apiKey: String) -> AsyncThrowingStream<StreamChunk, Error>
     /// Cheap key check: makes a tiny authenticated call. Returns normally if the key
@@ -46,7 +47,7 @@ protocol LLMClient {
 }
 
 extension LLMClient {
-    func judge(messages: [ChatMessage], apiKey: String) async throws -> String {
+    public func judge(messages: [ChatMessage], apiKey: String) async throws -> String {
         var full = ""
         for try await chunk in stream(messages: messages, apiKey: apiKey) {
             if case .text(let t) = chunk { full += t }
@@ -56,8 +57,8 @@ extension LLMClient {
 }
 
 /// Turns the HTTP status + body of a tiny test call into a clear, user-facing key error.
-enum KeyValidation {
-    static func interpret(status: Int, body: Data) throws {
+public enum KeyValidation {
+    public static func interpret(status: Int, body: Data) throws {
         if (200..<300).contains(status) { return }
         let text = (String(data: body, encoding: .utf8) ?? "").lowercased()
         switch status {
@@ -82,9 +83,9 @@ enum KeyValidation {
 }
 
 /// Human-readable error surfaced to the UI.
-enum LLMError: LocalizedError {
+public enum LLMError: LocalizedError {
     case message(String)
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self { case .message(let text): return text }
     }
 }
@@ -92,8 +93,8 @@ enum LLMError: LocalizedError {
 /// Turns an HTTP error status + response body into a clear, user-facing message — surfaces the
 /// provider's own text ("model 'X' does not exist", "invalid api key", "rate limit", …) instead
 /// of a bare "HTTP 404", so a wrong model id or key is self-explanatory.
-enum HTTPError {
-    static func describe(_ status: Int, _ body: String) -> String {
+public enum HTTPError {
+    public static func describe(_ status: Int, _ body: String) -> String {
         if let data = body.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let e = obj["error"] as? [String: Any], let m = e["message"] as? String { return m }
@@ -108,13 +109,17 @@ enum HTTPError {
 /// Picks the right client for a provider. Claude has its own wire format; everything else
 /// (GPT, Gemini, DeepSeek, Grok, Mistral, Perplexity, OpenRouter, local Ollama) speaks the
 /// OpenAI `/chat/completions` format and shares one client, differing only by endpoint.
-enum LLMClientFactory {
-    static func make(for provider: LLMProvider, model: String,
+public enum LLMClientFactory {
+    public static func make(for provider: LLMProvider, model: String,
                      temperature: Double? = nil, maxTokens: Int? = nil) -> LLMClient {
         // Fall back to the provider default if a blank model id ever slips through.
         let model = model.isEmpty ? provider.defaultModel : model
         if provider == .claude {
             return AnthropicClient(model: model, temperature: temperature, maxTokens: maxTokens)
+        }
+        // A custom slot whose URL is unset/cleared — say what to do, not just "unavailable".
+        if provider.customSlot != nil, provider.openAIEndpoint == nil {
+            return UnavailableClient(reason: "\(provider.panelName) has no endpoint set — add its server URL in Settings → Models.")
         }
         if let endpoint = provider.openAIEndpoint {
             return OpenAICompatibleClient(endpoint: endpoint, model: model,
@@ -128,12 +133,12 @@ enum LLMClientFactory {
 }
 
 /// Placeholder for backends we haven't wired yet (e.g. on-device Foundation Models).
-struct UnavailableClient: LLMClient {
-    let reason: String
-    func stream(messages: [ChatMessage], apiKey: String) -> AsyncThrowingStream<StreamChunk, Error> {
+public struct UnavailableClient: LLMClient {
+    public let reason: String
+    public func stream(messages: [ChatMessage], apiKey: String) -> AsyncThrowingStream<StreamChunk, Error> {
         AsyncThrowingStream { $0.finish(throwing: LLMError.message(reason)) }
     }
-    func validate(apiKey: String) async throws {
+    public func validate(apiKey: String) async throws {
         throw LLMError.message(reason)
     }
 }
