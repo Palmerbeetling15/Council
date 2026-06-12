@@ -3499,7 +3499,7 @@ private struct SettingsSheet: View {
                                 Exporter.saveCouncil(store.currentConfig(name: "My council"))
                             }
                             councilButton("IMPORT…", filled: false) {
-                                if let c = Exporter.openCouncil() { pendingImport = c }
+                                Exporter.openCouncil { c in if let c { pendingImport = c } }
                             }
                         }
                         Text("PRESETS").font(Blue.mono(9, .bold)).tracking(2).foregroundStyle(Blue.dim)
