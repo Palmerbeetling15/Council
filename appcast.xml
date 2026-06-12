@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Sparkle appcast for Council. Release flow:
-     1. build + zip:  ditto -c -k --keepParent Council.app Council-X.Y.Z-macOS.zip
-     2. sign:         sign_update -f <private key> Council-X.Y.Z-macOS.zip
+<!-- Sparkle appcast for Council. Release flow (NOTE: no double hyphens in this comment, XML forbids them):
+     1. build + zip:  ditto with c, k and keepParent flags into Council-X.Y.Z-macOS.zip
+     2. sign:         sign_update with the private key file, on that zip
      3. add an <item> below (newest first) with the gh-release download URL + signature + length
      4. commit + push (guard first), then gh release upload the zip -->
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
